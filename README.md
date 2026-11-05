@@ -62,7 +62,7 @@ Manual setup for each client is in [`examples/`](examples/); the core is just th
 
 Rules built into the system, not promises:
 
-- **Your browser stays on your machine.** Cookies and the logins you save in FoxPaw stay on your computer (saved logins are encrypted in the extension); the relay only forwards calls.
+- **Your browser stays on your machine.** The relay only forwards. It doesn't store page content, analyze it, or sell it. Run screenshots auto-delete after 7 days. Saved logins stay encrypted on your own computer; cookies stay in your Chrome.
 - **Payments always need your approval.** Every payment, subscription or upgrade click asks you on a card first (amount shown), every time; card numbers and payment passwords are always yours to type.
 - **Passwords and verification codes are yours by default** — unless you choose to trust a specific agent with saved logins; even then the extension fills them locally and the agent only ever sees `•••`. Human-verification checks are always left to you.
 - **The tab group is the boundary.** The agent can only see and act in tabs you put in the FoxPaw tab group. A newly invited agent gets no browser at all and starts read-only; you grant more per agent.
@@ -83,6 +83,12 @@ The client code is MIT-licensed and free to use and modify. The official hosted 
 <summary><b>Can FoxPaw or the relay see my passwords or cookies?</b></summary>
 
 The relay does not store them. Page actions happen in your own Chrome; cookies and the logins you save in FoxPaw stay on your machine. The relay only forwards calls and keeps permission records. An agent you choose to trust can sign in with a saved login, but the extension types it locally and the agent only sees `•••`.
+</details>
+
+<details>
+<summary><b>Can you see my browsing data?</b></summary>
+
+The relay sits in the path between your agent and your Chrome, so pages an agent reads pass through it — but it only forwards. It doesn't store page content, analyze it, or sell it. Agents can only read tabs you put in the FoxPaw tab group; anything else needs your approval on the spot. The activity feed records just the site name, and run screenshots auto-delete after 7 days. Saved logins stay encrypted on your own computer. This is not end-to-end encryption; traffic is encrypted in transit (HTTPS / WSS).
 </details>
 
 <details>
