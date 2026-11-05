@@ -1,10 +1,10 @@
 <div align="center"><a name="readme-top"></a>
 
-<img src="docs/images/banner.png" alt="FoxPaw — let your AI agent borrow your logged-in browser" width="100%">
+<img src="docs/images/banner.png" alt="FoxPaw — Cloud brain, local hands. Lend your real browser to every agent you use." width="100%">
 
 <h1>FoxPaw</h1>
 
-**Let your AI agent borrow your logged-in Chrome — your sessions, never your passwords.**
+**Lend your real, logged-in Chrome to every agent you use, cloud or local. One browser, many agents, no new logins. Payments always wait for your approval.**
 
 **English** · [简体中文](README.zh-CN.md) · [Website](https://foxpaw.aiyuancat.com) · [Agent guide](docs/agent-guide.md) · [Changelog](CHANGELOG.md) · [Issues](https://github.com/laomao-ai/foxpaw-extension/issues)
 
@@ -17,7 +17,7 @@
 
 </div>
 
-FoxPaw is a Chrome extension. Any MCP-capable agent (Claude Code, Codex, Cursor, …) connects through a hosted relay to the real Chrome on your own machine and works only inside the tabs you hand it: reading pages, filling forms, clicking buttons, recording and replaying flows. Sites you are logged in to just work; sites you are not, it can't get into either.
+FoxPaw is a Chrome extension. Agents running in the cloud or on your own computer — anything that speaks MCP, from hosted assistants to coding agents and IDEs — connect through a hosted relay to the real Chrome on your own machine and works only inside the tabs you hand it: reading pages, filling forms, clicking buttons, recording and replaying flows. Sites you are logged in to just work; sites you are not, it can't get into either.
 
 <!-- Demo GIF goes here (screen recording to be added): docs/images/demo.gif, ~20 s: agent reads an order list in an authorized tab → approval card pops up → user approves. -->
 
@@ -61,7 +61,7 @@ Manual setup for each client is in [`examples/`](examples/); the core is just th
 
 Rules built into the system, not promises:
 
-- **Sessions, not passwords.** Passwords and cookies never leave your computer.
+- **Your browser stays on your machine.** Cookies and the logins you save in FoxPaw stay on your computer (saved logins are encrypted in the extension); the relay only forwards calls.
 - **Payments always need your approval.** Every payment, subscription or upgrade click asks you on a card first (amount shown), every time; card numbers and payment passwords are always yours to type.
 - **Passwords and verification codes are yours by default** — unless you choose to trust a specific agent with saved logins; even then the extension fills them locally and the agent only ever sees `•••`. Human-verification checks are always left to you.
 - **The tab group is the boundary.** The agent can only see and act in tabs you put in the FoxPaw tab group. A newly invited agent gets no browser at all and starts read-only; you grant more per agent.
@@ -81,13 +81,13 @@ The client code is MIT-licensed and free to use and modify. The official hosted 
 <details>
 <summary><b>Can FoxPaw or the relay see my passwords or cookies?</b></summary>
 
-No. Page actions happen in your own Chrome; passwords and cookies stay on your machine. The relay only forwards calls and keeps permission records.
+The relay does not store them. Page actions happen in your own Chrome; cookies and the logins you save in FoxPaw stay on your machine. The relay only forwards calls and keeps permission records. An agent you choose to trust can sign in with a saved login, but the extension types it locally and the agent only sees `•••`.
 </details>
 
 <details>
 <summary><b>Which agents work with it?</b></summary>
 
-Any client that speaks MCP over HTTP (or via the stdio bridge): Claude Code, Codex, Cursor, VS Code and others. Ready-made configs are in [`examples/`](examples/).
+Cloud or local — any agent that speaks MCP over HTTP (or via the stdio bridge), for example hosted agents, Claude Code, Codex, Cursor or VS Code. Ready-made configs are in [`examples/`](examples/).
 </details>
 
 <details>

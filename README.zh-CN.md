@@ -1,10 +1,10 @@
 <div align="center"><a name="readme-top"></a>
 
-<img src="docs/images/banner.png" alt="FoxPaw · 狐爪：让你的 AI Agent 借用你已登录的浏览器" width="100%">
+<img src="docs/images/banner.png" alt="FoxPaw · 狐爪：云端的大脑，本地的手。把你正在用的浏览器，借给你所有的 Agent" width="100%">
 
 <h1>FoxPaw · 狐爪</h1>
 
-**让你的 AI Agent 借用你已登录的浏览器：借的是登录态，永远不交密码。**
+**把你已登录的 Chrome 借给所有 Agent，云端本地都行。一个浏览器、多个 Agent、不用重新登录，付款每次等你批。**
 
 [English](README.md) · **简体中文** · [官网](https://foxpaw.aiyuancat.com) · [Agent 接入说明](docs/agent-guide.md) · [更新日志](CHANGELOG.md) · [反馈](https://github.com/laomao-ai/foxpaw-extension/issues)
 
@@ -17,7 +17,7 @@
 
 </div>
 
-FoxPaw 是一个 Chrome 扩展。Claude Code、Codex、Cursor，凡是支持 MCP 的 Agent 都能通过托管中继连到你本机的真实 Chrome，只在你授权的标签页里看页面、填表单、点按钮、录制和回放流程。你在哪个网站登录着，它就能在那儿干活；你没登录的，它也进不去。
+FoxPaw 是一个 Chrome 扩展。不管 Agent 跑在云端还是你自己电脑上（云端托管的助手、编程 Agent、IDE……），只要支持 MCP，都能通过托管中继连到你本机的真实 Chrome，只在你授权的标签页里看页面、填表单、点按钮、录制和回放流程。你在哪个网站登录着，它就能在那儿干活；你没登录的，它也进不去。
 
 <!-- 演示动图位（之后补录屏）：docs/images/demo.gif，约 20 秒：Agent 在授权标签里读订单列表 → 侧栏弹批准卡 → 你点批准。 -->
 
@@ -61,7 +61,7 @@ FoxPaw 是一个 Chrome 扩展。Claude Code、Codex、Cursor，凡是支持 MCP
 
 写进系统里的规矩，不是口头承诺：
 
-1. **借登录态，不交密码**：密码和 Cookie 不离开你的电脑。
+1. **浏览器留在你本机**：Cookie 和你在 FoxPaw 里存的登录凭证都留在你电脑上（凭证加密存在扩展里），中继只负责转发。
 2. **付款每次都要你批准**：点付款、订阅、升级前每次弹卡等你批准（标明金额），不会被记住或放行；卡号、支付密码一律由你来填。
 3. **密码、验证码等默认由你来，除非你主动信任某个 Agent**：信任后它才能用你存的登录凭证登录，此时也由扩展在本机填入，Agent 看不到密码，回读只显示 `•••`。人机验证永远交给你。
 4. **标签组就是授权边界**：只有拖进 FoxPaw 标签组的标签，Agent 才能看和操作；组外页面它看不见、碰不到，要用必须当场向你申请。新邀请的 Agent 默认不授权任何浏览器、权限默认「只看」；每个 Agent 单独设置能看 / 能操作、信任范围（某站 / 全部网站 / 本次放行），原始 CDP 模式需单独授权。
@@ -82,13 +82,13 @@ FoxPaw 是一个 Chrome 扩展。Claude Code、Codex、Cursor，凡是支持 MCP
 <details>
 <summary><b>FoxPaw 或中继能看到我的密码和 Cookie 吗？</b></summary>
 
-不能。页面操作都在你本机的浏览器里发生，密码和 Cookie 不离开你的电脑；中继只负责转发和权限记账。
+中继不保存这些。页面操作都在你本机的浏览器里发生，Cookie 和你存在 FoxPaw 里的登录凭证留在你电脑上；中继只负责转发和权限记账。你主动信任的 Agent 可以用存好的凭证登录，但由扩展在本机填入，Agent 只看到 `•••`。
 </details>
 
 <details>
 <summary><b>支持哪些 Agent？</b></summary>
 
-凡是支持 MCP（HTTP 方式，或通过 stdio 桥接）的客户端都行：Claude Code、Codex、Cursor、VS Code 等，现成配置见 [examples/](examples/)。
+云端、本地都行：凡是支持 MCP（HTTP 方式，或通过 stdio 桥接）的 Agent，比如云端托管的 Agent、Claude Code、Codex、Cursor、VS Code 等，现成配置见 [examples/](examples/)。
 </details>
 
 <details>
