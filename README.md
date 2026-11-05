@@ -1,36 +1,49 @@
-<p align="center"><img src="docs/images/logo.png" width="96" alt="FoxPaw logo"></p>
+<div align="center"><a name="readme-top"></a>
 
-<h1 align="center">FoxPaw · 狐爪</h1>
+<img src="docs/images/banner.png" alt="FoxPaw — let your AI agent borrow your logged-in browser" width="100%">
 
-**让你的 AI 助手借用你的浏览器干活：借的是登录态，永远不交密码。**
+<h1>FoxPaw</h1>
 
-FoxPaw 是一个 Chrome 扩展。任何支持 MCP 的 AI 助手（Claude Code、Codex、Cursor 等）通过托管中继连到你本机的真实 Chrome，只在你授权的标签页里看页面、填表单、点按钮、录制和回放流程；付款、删除、提交这类敏感动作先弹卡，等你点头。
+**Let your AI agent borrow your logged-in Chrome — your sessions, never your passwords.**
 
-- 官网：https://foxpaw.aiyuancat.com
-- Agent 接入说明：https://foxpaw.aiyuancat.com/docs（本仓库副本见 [docs/agent-guide.md](docs/agent-guide.md)）
-- 许可证：MIT（[LICENSE](LICENSE)）
+**English** · [简体中文](README.zh-CN.md) · [Website](https://foxpaw.aiyuancat.com) · [Agent guide](docs/agent-guide.md) · [Changelog](CHANGELOG.md) · [Issues](https://github.com/laomao-ai/foxpaw-extension/issues)
 
-**架构一句话**：浏览器扩展（本仓库，MIT 开源）↔ 托管中继服务（由艾元猫工作室运营，`foxpaw.aiyuancat.com`）↔ 你的 Agent（标准 MCP）。中继只负责转发和权限记账，页面操作都在你本机的浏览器里发生。
+[![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/laomao-ai/foxpaw-extension?color=f2641a)](https://github.com/laomao-ai/foxpaw-extension/releases/latest)
+[![GitHub stars](https://img.shields.io/github/stars/laomao-ai/foxpaw-extension?style=flat&color=f2641a)](https://github.com/laomao-ai/foxpaw-extension/stargazers)
+[![Works with MCP](https://img.shields.io/badge/works%20with-MCP-6e56cf)](docs/agent-guide.md)
+[![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4?logo=googlechrome&logoColor=white)](extension/)
+[![Website](https://img.shields.io/badge/website-foxpaw.aiyuancat.com-f2641a)](https://foxpaw.aiyuancat.com)
 
----
+</div>
 
-## 看一眼
+FoxPaw is a Chrome extension. Any MCP-capable agent (Claude Code, Codex, Cursor, …) connects through a hosted relay to the real Chrome on your own machine and works only inside the tabs you hand it: reading pages, filling forms, clicking buttons, recording and replaying flows. Sites you are logged in to just work; sites you are not, it can't get into either.
 
-| 控制台 | 敏感动作先问你 |
+<!-- Demo GIF goes here (screen recording to be added): docs/images/demo.gif, ~20 s: agent reads an order list in an authorized tab → approval card pops up → user approves. -->
+
+## What it can do for you
+
+| | Before | With FoxPaw |
+|---|---|---|
+| **Your own back-office: export, reconcile, fill in** | Log in, filter by date, page through, copy into a sheet, compare line by line. | Drag the logged-in tab into the FoxPaw tab group and say *"Read all paid orders from Nov 4 and check them against this sheet."* It pages through and reads in your tab; anything it wants to change pops up an approval card first. |
+| **Across several sites: collect, compare, tabulate** | A dozen tabs, copy-paste price, specs and shipping one shop at a time. | *"Put this robot vacuum's price, specs and shipping from these three shops into one table."* Long pages are read to the end, chat widgets and "checking your browser" pages don't stall it. Slider / puzzle captchas are handed back to you. |
+| **Record once, run every day** | Every weekday morning: log in, pick "yesterday", export, screenshot, post. | Demonstrate once (or let the agent do it once) and FoxPaw saves it as a flow; turn on a schedule like "weekdays 09:00". Every run is logged step by step; if a step fails it pauses and tells you which step and why. |
+
+## See it
+
+| Console | Sensitive actions ask you first |
 |---|---|
-| ![控制台概览](docs/images/console-overview.png) | ![批准卡](docs/images/approval-card.png) |
-| **邀请 Agent：默认只看、不授权任何浏览器** | **官网** |
-| ![邀请弹窗](docs/images/invite-readonly.png) | ![官网首页](docs/images/site-home.png) |
+| ![Console overview](docs/images/console-overview.png) | ![Approval card](docs/images/approval-card.png) |
+| **Invite an agent: read-only, no browser granted by default** | **Website** |
+| ![Invite dialog](docs/images/invite-readonly.png) | ![Website home](docs/images/site-home.png) |
 
----
+## Quick start (30 seconds)
 
-## 30 秒上手
+1. **Install the extension** — download from the [website](https://foxpaw.aiyuancat.com/download/extension) or use [`extension/`](extension/) in this repo → open `chrome://extensions` → turn on *Developer mode* → *Load unpacked* and pick the folder.
+2. **Connect the browser** — in the side panel click *Connect this browser*, sign in with an email code and confirm; drag the tabs your agent may use into the FoxPaw tab group.
+3. **Invite your agent** — console → *Connect agent* → generate an invite (copied automatically) → paste it to your agent. It follows the [agent guide](https://foxpaw.aiyuancat.com/docs) to claim its token and configure MCP itself.
 
-1. **装扩展**：从 [官网下载](https://foxpaw.aiyuancat.com/download/extension) 或用本仓库 [extension/](extension/) 目录 → 打开 `chrome://extensions` → 右上角开「开发者模式」→「加载已解压的扩展程序」选中文件夹。
-2. **连浏览器**：点扩展侧栏「连接这台浏览器」，用邮箱验证码登录并确认；把要给 Agent 用的标签拖进 FoxPaw 标签组。
-3. **邀请 Agent**：控制台「接入 Agent」→ 生成邀请（自动复制）→ 粘给你的 Agent。它会照 [接入说明](https://foxpaw.aiyuancat.com/docs) 自己领令牌、配好 MCP。
-
-需要手动配置时，各客户端写法见 [examples/](examples/)，核心就两样：
+Manual setup for each client is in [`examples/`](examples/); the core is just this:
 
 ```json
 {
@@ -44,68 +57,67 @@ FoxPaw 是一个 Chrome 扩展。任何支持 MCP 的 AI 助手（Claude Code、
 }
 ```
 
-## 隐私与最小授权
+## Privacy and permissions
 
-写进系统里的规矩，不是口头承诺：
+Rules built into the system, not promises:
 
-1. **借登录态，不交密码**：密码和 Cookie 不离开你的电脑。Agent 用你存的登录凭证登录时看不到密码，扩展在本机填入，回读只显示 `•••`。
-2. **标签组就是授权边界**：只有拖进 FoxPaw 标签组的标签，Agent 才能看和操作；组外页面它看不见、碰不到，要用必须当场向你申请。
-3. **默认最小权限**：从控制台概览快捷邀请的 Agent 默认不授权任何浏览器，接入后由你按需授权；每个 Agent 单独设置能看 / 能操作、信任范围（某站 / 全部网站 / 本次放行），原始 CDP 模式需单独授权。
-4. **敏感动作先确认**：付款、授权、删除、提交先弹审批卡；付款页和支付密码框永远由你亲手完成；人机验证永远交给你。一键「全部暂停」随时让所有 Agent 停手。
-5. **凭证归你管**：每台设备、每个 Agent 一份独立令牌，中继只存哈希；在控制台随时改名、断开、吊销，立即生效。
-6. **录制先脱敏**：录下的流程上云前去掉凭据和你输入的秘密值；Agent 提交的草稿流程和站点经验要你收下才生效。
+- **Sessions, not passwords.** Passwords and cookies never leave your computer.
+- **Payments are always yours.** Card numbers, payment passwords and the pay step are always handed back to you.
+- **Passwords and verification codes are yours by default** — unless you choose to trust a specific agent with saved logins; even then the extension fills them locally and the agent only ever sees `•••`. Human-verification checks are always left to you.
+- **The tab group is the boundary.** The agent can only see and act in tabs you put in the FoxPaw tab group. A newly invited agent gets no browser at all and starts read-only; you grant more per agent.
+- **Ask before changing things.** Submits, deletes and authorizations pop up an approval card; *Pause all* stops every agent at once.
+- **Your tokens, your control.** One token per device and per agent, stored hashed on the relay; rename, disconnect or revoke any time, effective immediately.
 
-扩展申请的浏览器权限及用途：`tabs` / `tabGroups`（识别授权标签组）、`scripting` / `debugger`（在授权标签里读页和操作）、`webRequest`（只观察不拦截，用于判断页面加载是否完成）、`storage`（本机设置与加密保存的登录凭证）、`notifications` / `sidePanel` / `alarms` / `webNavigation` / `activeTab`（侧栏、提醒、导航状态）。源码都在 [extension/](extension/)，欢迎审阅。
+Browser permissions and why: `tabs` / `tabGroups` (find the authorized tab group), `scripting` / `debugger` (read and act in authorized tabs), `webRequest` (observe only, never block, to tell when a page finished loading), `storage` (local settings and encrypted saved logins), `notifications` / `sidePanel` / `alarms` / `webNavigation` / `activeTab` (side panel, reminders, navigation state). The full source is in [`extension/`](extension/) — no third-party code, no build step.
 
-## 免费与边界
+## FAQ
 
-- 客户端代码 MIT 开源，可自由使用修改。
-- 官方托管服务公测期免费，可能设用量上限；未来可能推出付费方案，并会提前公告。
-- 不提供 SLA。
-- 中继服务端暂不开源。
+<details>
+<summary><b>Is it free?</b></summary>
 
-## 它能做什么
+The client code is MIT-licensed and free to use and modify. The official hosted relay is free during the public beta and may have usage limits; paid plans may be introduced later with advance notice. No SLA is provided.
+</details>
 
-- **读页与操作**：页面快照（带稳定 ref）、点击、填表（含下拉、日期、上传）、等待条件、滚动加载、批量抽取、只读 DOM 查询、截图、多步批处理。
-- **录制成流程**：你演示一遍，或让 Agent 照目标做一遍，都能沉淀成可回放的流程；回放失败会暂停等你处理。
-- **站点经验**：Agent 把某个网站的入口、坑、注意事项留成经验，你收下后，你的其他 Agent 也能用上。
-- **多 Agent、多设备**：几台电脑连到同一个账户，每台独立吊销；多个 Agent 同时接入，谁在干活、谁在等你一目了然。
-- **需要你时举手**：登录、验证码、二次确认等只有你能做的事，Agent 会举手等你。
+<details>
+<summary><b>Can FoxPaw or the relay see my passwords or cookies?</b></summary>
 
-## 仓库结构
+No. Page actions happen in your own Chrome; passwords and cookies stay on your machine. The relay only forwards calls and keeps permission records.
+</details>
 
-```
-extension/   Chrome 扩展源码（Manifest V3，1.33.1）
-docs/        Agent 接入说明、旧版迁移说明（线上公开版本的副本）
-examples/    各 MCP 客户端配置示例、领取令牌示例
-CHANGELOG.md 对外版本要点
-SECURITY.md  安全问题报告方式
-CONTRIBUTING.md 参与方式
-```
+<details>
+<summary><b>Which agents work with it?</b></summary>
 
-扩展源码不含第三方代码或依赖，无需构建，直接「加载已解压的扩展程序」即可。
+Any client that speaks MCP over HTTP (or via the stdio bridge): Claude Code, Codex, Cursor, VS Code and others. Ready-made configs are in [`examples/`](examples/).
+</details>
 
-### 关于 manifest.json 里的 `key`
+<details>
+<summary><b>How is this different from browser automation that opens its own browser?</b></summary>
 
-`extension/manifest.json` 保留了 `key` 字段。它是扩展的**公钥**（不是私钥，不泄露任何秘密），作用是让你自己加载本仓库源码时得到的扩展 ID 与官方发布包一致，这样「检查更新」、已有配对和托管中继对扩展的识别都能照常工作。如果你想以独立扩展的身份运行（例如改名自用、避免与官方包冲突），删掉 `key` 这一行即可，Chrome 会按文件夹路径生成新的扩展 ID，然后重新连接一次浏览器。
+Tools that launch a fresh browser start logged out, so the agent hits login pages, SMS codes and "new device" checks. FoxPaw works in the Chrome you already use, only in the tabs you authorize, with approval cards for sensitive actions.
+</details>
 
-## 反馈
+<details>
+<summary><b>Can I self-host the relay?</b></summary>
 
-- Bug、功能建议、网站兼容问题：请用 Issues（已提供模板）
-- 安全漏洞：请勿公开提 Issue，按 [SECURITY.md](SECURITY.md) 私下报告
+Not at the moment: the relay server is not open source. The extension in this repo is fully open, and you can run it as an independent extension (see the note on `key` in the [Chinese README](README.zh-CN.md#关于-manifestjson-里的-key)).
+</details>
 
----
+## Open source and limits
 
-## English
+- The client code is MIT-licensed and free to use and modify.
+- The official hosted relay is free during the public beta and may have usage limits; paid plans may be introduced later with advance notice.
+- No SLA is provided.
+- The relay server is not open source at this time; it is operated by 艾元猫工作室 (Aiyuanmao Studio) at `foxpaw.aiyuancat.com`.
 
-**FoxPaw lets your AI agent borrow your real, logged-in Chrome: it uses your sessions, never your passwords.**
+**Architecture in one line:** browser extension (this repo, MIT) ↔ hosted relay ↔ your agent (standard MCP). The relay only forwards and keeps permission records; page actions happen in your own browser.
 
-FoxPaw is a Chrome extension (this repository, MIT-licensed). Any MCP-capable agent (Claude Code, Codex, Cursor, …) reaches the Chrome on your own machine through a hosted relay operated by 艾元猫工作室 (Aiyuanmao Studio) and works only inside the tabs you put in the FoxPaw tab group. Sensitive actions (payments, authorizations, deletes, submits) wait for your approval; payment fields and human-verification checks are always left to you.
+## Contributing and security
 
-**Quick start:** load `extension/` via `chrome://extensions` → Developer mode → "Load unpacked"; click "Connect this browser" in the side panel and sign in with an email code; invite your agent from the console. Manual MCP configs for common clients are in [examples/](examples/): the endpoint is `https://foxpaw.aiyuancat.com/mcp` with `Authorization: Bearer <token>`.
+- Bugs, feature requests, site compatibility: [Issues](https://github.com/laomao-ai/foxpaw-extension/issues) (templates provided). See [CONTRIBUTING.md](CONTRIBUTING.md).
+- Security vulnerabilities: please don't open a public issue — report privately as described in [SECURITY.md](SECURITY.md).
 
-**Privacy:** passwords and cookies never leave your machine; agents invited with the console's quick invite get no browser access until you grant it; per-device and per-agent tokens are stored hashed on the relay and can be revoked at any time.
+## Star History
 
-**Free use and limits:** the client code is MIT-licensed and free to use and modify. The official hosted relay is free during the public beta and may have usage limits; paid plans may be introduced later with advance notice. No SLA is provided. The relay server is not open source at this time.
+[![Star History Chart](https://api.star-history.com/svg?repos=laomao-ai/foxpaw-extension&type=Date)](https://star-history.com/#laomao-ai/foxpaw-extension&Date)
 
-Agent guide (Chinese): https://foxpaw.aiyuancat.com/docs · Security reports: see [SECURITY.md](SECURITY.md).
+<div align="right"><a href="#readme-top">Back to top ↑</a></div>
