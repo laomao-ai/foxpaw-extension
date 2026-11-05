@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<script src="i18n.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>狐爪</title>
 <style>
@@ -503,6 +504,9 @@
   .needc.runp .acts { flex-wrap:wrap; }
   .needc.runp .acts .btn.pri { flex:1 1 100%; }
   .needc.runp .acts .btn:not(.pri) { flex:1; min-width:0; }
+  /* 1.34: English labels are longer — the approve button takes its own row, the rest wrap below */
+  html[lang="en"] .needc .acts { flex-wrap:wrap; }
+  html[lang="en"] .needc .acts .btn.pri { flex:1 1 100%; }
   .rnet { font-size:var(--fs-sm); color:var(--fp-text-secondary); margin:-4px 2px var(--s2); line-height:1.5; }
   .rnet b { color:var(--fp-green); font-weight:700; }
   .rnet.warn { color:var(--fp-amber); }
@@ -778,6 +782,9 @@
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation:none !important; transition:none !important; }
   }
+
+  /* 1.34: English UI puts Latin faces first (narrow quotes and punctuation); Chinese user data still falls back to CJK fonts */
+  html[lang="en"] body, html[lang="en"] button, html[lang="en"] input, html[lang="en"] select, html[lang="en"] textarea { font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
 </style>
 </head>
 <body>
@@ -975,6 +982,7 @@
         </div>
         <!-- 1.27: the browser-level 停用 / 只看 / 可操作 is gone — permission is per agent (its row's chip / ⋯); 全部暂停 is on the island -->
         <div class="row"><span class="k">敏感动作</span><span class="sp"></span><div class="seg plain" id="sensSeg"><button data-v="ask">每次问我</button><button data-v="rules">按站点规则</button></div></div>
+        <div class="row" id="langRow"><span class="k">语言</span><span class="sp"></span><div class="seg plain" id="langSeg" translate="no" aria-label="Language"><button data-v="zh" type="button">中文</button><button data-v="en" type="button">English</button></div></div>
         <div class="row" id="verRow"><span class="k">扩展版本</span><span class="v" id="meVer">—</span><button class="chk" id="meChk" type="button" title="向中继查一下有没有新版">检查更新</button></div>
         <div class="row link hidden" id="meSwitch"><span class="t sp">切换账号</span><span class="chev">›</span></div>
         <div class="row link danger" id="meSignOut"><span class="t sp">断开这台浏览器</span></div>

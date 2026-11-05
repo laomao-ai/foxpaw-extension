@@ -11,10 +11,19 @@ if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
 }
 
 const GROUP_TITLE = 'FoxPaw';
-const VERSION = '1.33.2';
+const VERSION = '1.34.0';
 // 1.17 录制版: the flow format / conversion / Playwright export
 // live in flow.js (pure, shared with Node tests and tools)
 const FF = (() => { try { if (typeof importScripts === 'function' && !self.FoxFlow) importScripts('flow.js'); } catch (e) { console.warn('[foxpaw] flow.js not loaded', e); } return self.FoxFlow || null; })();
+// 1.34 中 / EN：系统通知跟侧栏语言走（storage.uiLang，侧栏写入；没有时按 Chrome 界面语言）。词典与侧栏同一份 i18n.js。
+const I18N = (() => { try { if (typeof importScripts === 'function' && !self.fpI18n) importScripts('i18n.js'); } catch (e) { console.warn('[foxpaw] i18n.js not loaded', e); } return self.fpI18n || null; })();
+let uiLang = null;
+try {
+  const g = chrome.storage.local.get('uiLang');
+  if (g && typeof g.then === 'function') g.then((o) => { if (o && (o.uiLang === 'en' || o.uiLang === 'zh')) uiLang = o.uiLang; }).catch(() => {});
+  chrome.storage.onChanged.addListener((c, area) => { if (area === 'local' && c.uiLang) uiLang = c.uiLang.newValue === 'en' || c.uiLang.newValue === 'zh' ? c.uiLang.newValue : null; });
+} catch { /* test mocks */ }
+function l10n(s) { if (!I18N) return s; return (uiLang || I18N.lang) === 'en' ? I18N.en(s) : s; }
 const RELAY_HTTP = 'https://foxpaw.aiyuancat.com'; // 1.31.0: default for NEW pairings; a stored pairing keeps its own address
 const DEFAULTS = {
   pairing: '',          // wss://host/ext#<token>
@@ -2658,7 +2667,7 @@ function notifyOwner(nid, title, message, tabId) {
   const n = chrome.notifications;
   if (!n || typeof n.create !== 'function') return false; // no "notifications" permission: badge + panel only
   try {
-    n.create(nid, { type: 'basic', iconUrl: 'icons/foxpaw-128.png', title: String(title).slice(0, 60), message: String(message).slice(0, 180), priority: 2, requireInteraction: true }, () => void (chrome.runtime && chrome.runtime.lastError));
+    n.create(nid, { type: 'basic', iconUrl: 'icons/foxpaw-128.png', title: String(l10n(title)).slice(0, 60), message: String(l10n(message)).slice(0, 180), priority: 2, requireInteraction: true }, () => void (chrome.runtime && chrome.runtime.lastError));
     if (tabId != null) notifTabs.set(nid, tabId);
     return true;
   } catch { return false; }

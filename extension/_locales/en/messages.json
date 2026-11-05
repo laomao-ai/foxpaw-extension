@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "FoxPaw",
+    "description": "Extension name"
+  },
+  "extDesc": {
+    "message": "One account. The signed-in Chrome on every computer you use, lent to every agent you run. Every payment needs your approval.",
+    "description": "Extension description (Chrome Web Store / chrome://extensions)"
+  }
+}

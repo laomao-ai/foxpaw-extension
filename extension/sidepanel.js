@@ -72,7 +72,7 @@ function agoCore(ts) {
   if (d.toDateString() === new Date(Date.now() - 864e5).toDateString()) return '昨天';
   return `${Math.max(1, Math.floor(s / 86400))} 天前`;
 }
-function agoCame(ts) { const c = agoCore(ts); return c ? c + '来过' : ''; }
+function agoCame(ts) { const c = agoCore(ts); return c ? `${c}来过` : ''; }
 function nextRunText(ts) {
   const d = toDate(ts);
   if (!d) return '';
@@ -341,7 +341,7 @@ function renderPending() {
     const otp = p.category === 'otp' || p.otp;
     const card = el(`<div class="card needc appr" data-id="${esc(p.id)}">
       <div class="k">需要你处理 · ${esc(when(p.openedAt || Date.now()) || '刚刚')}</div>
-      <h3>${esc(who)} 要${esc(verb)}${what && what !== verb ? `：${esc(what)}` : ''}</h3>
+      <h3>${what && what !== verb ? `${esc(who)} 要${esc(verb)}：${esc(what)}` : `${esc(who)} 要${esc(verb)}`}</h3>
       ${p.category === 'pay' ? `<div class="paytag"><b>付款</b>${p.amount ? `<span>${esc(p.amount)}</span>` : ''}</div>` : ''}
       <p>${p.category === 'pay' ? '批准后它会替你点下去，可能马上扣费。付款每次都要你批准，不会记住，信任也不免。' : p.category === 'login' ? '密码由 FoxPaw 在本机填入，Agent 看不到；只用这一次。' : p.category === 'vault' ? '密码只加密存在这台浏览器，Agent 之后可以用它登录（看不到密码）。' : otp ? '允许后，本任务里的验证码由它代填，不再打断你。' : p.category === 'delete' ? '删除后可能无法恢复。' : p.category === 'submit' ? '提交后通常不能撤回。' : '批准后它才会继续。'}</p>
       ${where ? `<div class="tabref"><span class="sq sm">${esc(siteLetter({ url: p.origin, title: p.page }))}</span><span class="ell" title="${esc(where)}">${esc(where)}</span></div>` : ''}
@@ -479,7 +479,7 @@ function renderRuns() {
     const bar = `<div class="prog"><div class="bar"><i style="width:${pct}%"></i>${apct ? `<i class="a" style="width:${apct}%"></i>` : ''}</div><span>${r.status === 'paused' ? r.cur : Math.max(done, (r.cur || 1) - 1)} / ${of} 步</span></div>`;
     if (r.status === 'running') {
       box.append(el(`<div class="card runc" data-run="${esc(r.id)}"><div class="rh"><span class="rdot" aria-hidden="true"></span><b>${esc(r.name || '流程')}</b><span class="pill green">运行中</span></div>
-        ${bar}<div class="rl">正在：${esc(r.label || '准备中')}${r.task ? ' · ' + esc(r.task) : ''}${r.by ? ' · ' + esc(r.by) : ''}</div></div>`));
+        ${bar}<div class="rl">${`正在：${esc(r.label || '准备中')}`}${r.task ? ' · ' + esc(r.task) : ''}${r.by ? ' · ' + esc(r.by) : ''}</div></div>`));
       continue;
     }
     const p = r.pause || {};
@@ -599,6 +599,15 @@ async function checkUpdate(manual) {
   showToast(`已是最新 ${cur}`, 2600);
 }
 $('meChk').onclick = (e) => { e.stopPropagation(); checkUpdate(true); };
+// 1.34 中 / EN：语言跟浏览器界面走，「我 → 语言」手动切换并记住（localStorage + storage.uiLang，后台通知也跟着）
+{
+  const L = window.fpI18n;
+  const seg = $('langSeg');
+  if (L && seg) {
+    seg.querySelectorAll('button').forEach((b) => { b.classList.toggle('on', b.dataset.v === L.lang); b.onclick = () => { if (b.dataset.v === L.lang) return; L.set(b.dataset.v); location.reload(); }; });
+    try { chrome.storage.local.set({ uiLang: L.lang }); } catch { /* noop */ }
+  } else if ($('langRow')) $('langRow').classList.add('hidden');
+}
 
 /* 1.21 ：录制中打开了别的网站的新标签 → 「把这个标签加入录制？」 */
 function renderAskBar() {
@@ -776,7 +785,7 @@ function agentCard(a, tasks, access, presMap) {
       const v = b.dataset.t;
       if (v === 'all' && tMode === 'all') { menuFor = null; render(); return; }
       if (v === 'none' && tMode === 'none') { menuFor = null; render(); return; }
-      if (v === 'all' && !confirm(`信任「${a.label}」在全部网站免审批？付款类仍交你，随时可改回。`)) return;
+      if (v === 'all' && !confirm(`信任「${a.label}」在全部网站免审批？付款每次都要你批准，随时可改回。`)) return;
       menuFor = null; render();
       const r = await send({ type: 'foxpaw.agentTrust', agentId: a.id, agent: a.label, mode: v, confirm: v === 'all', tabId: cur ? cur.tabId : null })
         .catch((x) => ({ ok: false, error: String(x.message || x) }));
@@ -1083,7 +1092,7 @@ function islandModel(list) {
   }
   if (steps.length) {
     const u = steps[0];
-    return { s: 'attention', agent: byLabel(u.agent || 'Agent'), l1: `${who(u.agent)} 需要你${esc(USTEP_CN[u.reason] || '亲自操作一步')}${u.page ? ' · ' + esc(u.page) : ''}`, st: '需要你处理', sub: moreSub,
+    return { s: 'attention', agent: byLabel(u.agent || 'Agent'), l1: u.page ? `${who(u.agent)} 需要你${esc(USTEP_CN[u.reason] || '亲自操作一步')} · ${esc(u.page)}` : `${who(u.agent)} 需要你${esc(USTEP_CN[u.reason] || '亲自操作一步')}`, st: '需要你处理', sub: moreSub,
       act: u.tabId != null ? { text: '去处理', pri: true, run: () => send({ type: 'foxpaw.userStepGo', id: u.id }).catch(() => activateTab(u.tabId)) } : { text: '去看看', pri: true, run: () => focusIn('pending') } };
   }
   if (loginWait) {
@@ -1200,9 +1209,9 @@ function todoItems(list) {
   const out = [];
   const confs = D.ui.pendingConfirms || [];
   const asks = D.ui.pendingAsks || [];
-  for (const p of confs) out.push({ k: 'c:' + p.id, t: `${p.agent || 'Agent'} 想${VERB_TEXT[p.category] || VERB_TEXT.gate}${p.tabId != null && tabTitleOf(p.tabId) ? '「' + tabTitleOf(p.tabId) + '」' : p.host ? ' · ' + p.host : ''}`, tag: '批准', go: () => focusIn('pending') });
+  for (const p of confs) out.push({ k: 'c:' + p.id, t: p.tabId != null && tabTitleOf(p.tabId) ? `${p.agent || 'Agent'} 想${VERB_TEXT[p.category] || VERB_TEXT.gate}「${tabTitleOf(p.tabId)}」` : p.host ? `${p.agent || 'Agent'} 想${VERB_TEXT[p.category] || VERB_TEXT.gate} · ${p.host}` : `${p.agent || 'Agent'} 想${VERB_TEXT[p.category] || VERB_TEXT.gate}`, tag: '批准', go: () => focusIn('pending') });
   for (const a of list) for (const n of agentNeeds(a)) out.push({ k: 'n:' + n.id, t: `${a.label}：${n.reason || '需要你处理一下'}`, tag: '接手', go: () => (n.tabId != null ? activateTab(n.tabId) : focusIn('needZone')) });
-  for (const u of userStepsShown()) out.push({ k: 'u:' + u.id, t: `${u.agent || 'Agent'} 需要你${USTEP_CN[u.reason] || '亲自操作一步'}${u.page ? ' · ' + u.page : ''}`, tag: '接手', go: () => (u.tabId != null ? send({ type: 'foxpaw.userStepGo', id: u.id }).catch(() => activateTab(u.tabId)) : focusIn('pending')) });
+  for (const u of userStepsShown()) out.push({ k: 'u:' + u.id, t: u.page ? `${u.agent || 'Agent'} 需要你${USTEP_CN[u.reason] || '亲自操作一步'} · ${u.page}` : `${u.agent || 'Agent'} 需要你${USTEP_CN[u.reason] || '亲自操作一步'}`, tag: '接手', go: () => (u.tabId != null ? send({ type: 'foxpaw.userStepGo', id: u.id }).catch(() => activateTab(u.tabId)) : focusIn('pending')) });
   const ar = agentRec();
   if (ar && ar.paused === 'login') out.push({ k: 'l', t: `${ar.agentLabel || 'Agent'} 录到登录页，需要你登录${ar.pauseHost ? ' ' + ar.pauseHost : ''}`, tag: '登录', go: () => (ar.pauseTab != null ? activateTab(ar.pauseTab) : focusIn('recPause')) });
   for (const q of asks) out.push({ k: 'q:' + q.id, t: `${q.agent || 'Agent'} 问：${q.question || '有个问题想问你'}`, tag: '回答', go: () => focusIn('pending', 'input') });

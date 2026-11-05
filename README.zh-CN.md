@@ -142,7 +142,7 @@ FoxPaw 是一个 Chrome 扩展。家里、公司、异地的每台电脑装上�
 ## 仓库结构
 
 ```
-extension/   Chrome 扩展源码（Manifest V3，1.33.2）
+extension/   Chrome 扩展源码（Manifest V3，1.34.0）
 docs/        Agent 接入说明、旧版迁移说明（线上公开版本的副本）、README 图片
 examples/    各 MCP 客户端配置示例、领取令牌示例
 CHANGELOG.md 对外版本要点
