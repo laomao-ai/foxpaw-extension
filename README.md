@@ -1,4 +1,6 @@
-# FoxPaw · 狐爪
+<p align="center"><img src="docs/images/logo.png" width="96" alt="FoxPaw logo"></p>
+
+<h1 align="center">FoxPaw · 狐爪</h1>
 
 **让你的 AI 助手借用你的浏览器干活：借的是登录态，永远不交密码。**
 
@@ -9,6 +11,16 @@ FoxPaw 是一个 Chrome 扩展。任何支持 MCP 的 AI 助手（Claude Code、
 - 许可证：MIT（[LICENSE](LICENSE)）
 
 **架构一句话**：浏览器扩展（本仓库，MIT 开源）↔ 托管中继服务（由艾元猫工作室运营，`foxpaw.aiyuancat.com`）↔ 你的 Agent（标准 MCP）。中继只负责转发和权限记账，页面操作都在你本机的浏览器里发生。
+
+---
+
+## 看一眼
+
+| 控制台 | 敏感动作先问你 |
+|---|---|
+| ![控制台概览](docs/images/console-overview.png) | ![批准卡](docs/images/approval-card.png) |
+| **邀请 Agent：默认只看、不授权任何浏览器** | **官网** |
+| ![邀请弹窗](docs/images/invite-readonly.png) | ![官网首页](docs/images/site-home.png) |
 
 ---
 
