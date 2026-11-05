@@ -11,7 +11,7 @@ if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
 }
 
 const GROUP_TITLE = 'FoxPaw';
-const VERSION = '1.34.0';
+const VERSION = '1.34.1';
 // 1.17 录制版: the flow format / conversion / Playwright export
 // live in flow.js (pure, shared with Node tests and tools)
 const FF = (() => { try { if (typeof importScripts === 'function' && !self.FoxFlow) importScripts('flow.js'); } catch (e) { console.warn('[foxpaw] flow.js not loaded', e); } return self.FoxFlow || null; })();

@@ -1121,7 +1121,8 @@ function islandModel(list) {
   if (live) {
     const { t0, title } = agentTab(live);
     const verb = t0 && t0.via === 'touch' ? touchText(t0) : '正在操作';
-    const what = title ? `${verb}「${esc(title)}」` : live.tabs ? `正在操作 ${live.tabs} 个标签` : '最近在活动';
+    const qq = window.fpI18n && window.fpI18n.lang === 'en' ? [' “', '”'] : ['「', '」']; // 1.34.1: English island uses English quotes around the tab title
+    const what = title ? `${verb}${qq[0]}${esc(title)}${qq[1]}` : live.tabs ? `正在操作 ${live.tabs} 个标签` : '最近在活动';
     const extra = lw.length > 1 ? ` · 另 ${lw.length - 1} 个也在干` : ''; // 1.27 no permission word on the island
     return { s: 'running', agent: live, l1: `${who(live.label)} ${what}`, st: '运行中', sub: dev + extra };
   }
@@ -1304,7 +1305,7 @@ function renderIslandDet(list, m) {
     const cf = connFor();
     const st = conn.state === 'online' ? `<span class="ok">${esc(cf || '已连接')}</span>` : `<span class="bad">${esc(connShort(conn))}</span>`;
     b.append(el(`<div class="dr"><span class="v"><b>${esc(devName())}</b> · ${st}</span></div>`));
-    const vr = el(`<div class="dr"><span class="v">扩展 v${esc(ver)}</span><button class="mini" id="islChk" type="button">${updChecking ? '检查中…' : '检查更新'}</button></div>`);
+    const vr = el(`<div class="dr"><span class="v" title="${esc(ver)}">FoxPaw 内测版 ${esc(String(ver).split('.').slice(0, 2).join('.'))}</span><button class="mini" id="islChk" type="button">${updChecking ? '检查中…' : '检查更新'}</button></div>`);
     vr.querySelector('button').onclick = (e) => { e.stopPropagation(); checkUpdate(true); };
     b.append(vr);
   }
@@ -1555,7 +1556,12 @@ function renderMe() {
   $('meSwitch').classList.toggle('hidden', !(acct && acct.email));
   $('meDevice').textContent = D.ui.deviceLabel || '—';
   $('meConn').textContent = connShort(conn);
-  $('meVer').textContent = 'v' + (conn.version || chrome.runtime.getManifest?.().version || '');
+  { // 1.34.1: users see the beta label with major.minor only (FoxPaw 内测版 1.34 / FoxPaw Beta 1.34); the full number is in the tooltip
+    const full = String(conn.version || chrome.runtime.getManifest?.().version || '');
+    const mm = full.split('.').slice(0, 2).join('.');
+    $('meVer').textContent = mm ? `FoxPaw 内测版 ${mm}` : '—';
+    $('meVer').title = full;
+  }
   document.querySelectorAll('#sensSeg button').forEach((b) => b.classList.toggle('on', b.dataset.v === (D.cfg.sensitive || 'ask')));
   const rules = Object.entries(D.cfg.siteRules || {});
   $('rulesCount').textContent = `${rules.length} 条`;
@@ -1754,6 +1760,7 @@ async function openSite(url) {
 }
 document.querySelectorAll('#manage .row[data-go]').forEach((r) => { r.onclick = () => openConsole(r.dataset.go); });
 $('goHome').onclick = () => openSite(siteBase() + '/');
+$('goFeedback').onclick = () => { try { chrome.tabs.create({ url: 'mailto:foxpaw@aiyuancat.com' }); } catch (_) { location.href = 'mailto:foxpaw@aiyuancat.com'; } };
 $('meReconnect').onclick = () => send({ type: 'foxpaw.reconnect' }).catch(() => {});
 $('meNotifyTest').onclick = async () => {
   const r = await send({ type: 'foxpaw.notifyTest' }).catch(() => null);
