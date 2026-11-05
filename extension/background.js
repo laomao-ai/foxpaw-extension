@@ -11,7 +11,7 @@ if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
 }
 
 const GROUP_TITLE = 'FoxPaw';
-const VERSION = '1.33.1';
+const VERSION = '1.33.2';
 // 1.17 录制版: the flow format / conversion / Playwright export
 // live in flow.js (pure, shared with Node tests and tools)
 const FF = (() => { try { if (typeof importScripts === 'function' && !self.FoxFlow) importScripts('flow.js'); } catch (e) { console.warn('[foxpaw] flow.js not loaded', e); } return self.FoxFlow || null; })();
@@ -256,7 +256,10 @@ function err(code, message) {
 
 /* ---------------- classification (Nanobrowser-style, deterministic) ---------------- */
 const CLASS_WORDS = {
-  pay: ['支付', '付款', '下单', '购买', '结算', '充值', 'pay', 'purchase', 'checkout', 'buy now', 'place order', '充值'],
+  // 1.33.2: subscription / upgrade confirmations are payments too (a 「Subscribe to Project? $30/月」 dialog)
+  // (bare 「Subscribe / 订阅 / Upgrade」 are decided by what is around them — a newsletter 订阅 is no payment)
+  pay: ['支付', '付款', '下单', '购买', '结算', '充值', 'pay', 'purchase', 'checkout', 'buy now', 'place order', '充值',
+    'confirm purchase', 'confirm payment', 'confirm and pay', '开通会员', '升级会员', '续费', '确认购买'],
   delete: ['删除', '注销', '清空', '销毁', 'delete', 'remove', 'destroy', '注销账号'],
   grant: ['授权', '授权并', 'grant', 'authorize', 'allow access'],
   // v1.18.1: 存入 / 入库 / 上架 / 下架 / 创建 / 生成 / generate are writes of the same kind
@@ -280,6 +283,28 @@ function classifyText(text) {
     if (CLASS_RE[cat].test(t)) return cat;
   }
   return 'normal';
+}
+// 1.33.2 a plain 「Confirm」 / 「确定」 is a payment when the dialog (or card) it sits in is about buying:
+// a subscribe / upgrade / purchase word AND a price or a billing period. amount = 「$30/月」 for the card.
+const PAY_CTX_WORD = /subscri(be|ption)|upgrade|purchase|payment|checkout|billing|plan|订阅|升级|购买|付款|支付|开通|续费|套餐|会员|扣款/i;
+const PAY_PRICE_RE = /(?:[$€£¥￥]|US\$|HK\$)\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?(?:元|美元|usd|rmb|cny|eur|\$)/i;
+const PAY_PERIOD_RE = /(?:\/|per\s+|a\s+|每)\s?(?:mo(?:nth)?|月|yr|year|年|week|周|wk)\b|\bmonthly\b|\bannual(?:ly)?\b|\byearly\b|按月|按年|包月|包年|月付|年付|自动续费|\brecurring\b|\bbilled\b|\brenews?\b/i;
+// a button whose own name says subscribe / upgrade — paid when a price or billing period sits right next to it
+const PAY_BTN_NEAR = /subscri|upgrade|订阅|升级|开通|get (pro|plus|premium|started)|choose (this )?plan|select (this )?plan|start (free )?trial/i;
+function payContext(text) {
+  const t = String(text || '');
+  return !!t && PAY_CTX_WORD.test(t) && (PAY_PRICE_RE.test(t) || PAY_PERIOD_RE.test(t));
+}
+function payAmount(text) {
+  const t = String(text || '');
+  const m = PAY_PRICE_RE.exec(t);
+  if (!m) return /\bmonthly\b|按月|月付|包月|\/\s?mo/i.test(t) ? '按月扣费' : /\bannual|\byearly\b|按年|年付|包年/i.test(t) ? '按年扣费' : '';
+  const after = t.slice(m.index + m[0].length, m.index + m[0].length + 24);
+  const per = /^\s*(?:\/|per\s+|a\s+|每)\s?(mo(?:nth)?|月|yr|year|年|week|周|wk)/i.exec(after);
+  const near = t.slice(Math.max(0, m.index - 40), m.index + 60);
+  const unit = per ? per[1] : /\bmonthly\b|按月|月付|包月/i.test(near) ? 'mo' : /\bannual|\byearly\b|按年|年付|包年/i.test(near) ? 'yr' : '';
+  const cn = /^(mo|month|月)/i.test(unit) ? '/月' : /^(yr|year|年)/i.test(unit) ? '/年' : /^(week|wk|周)/i.test(unit) ? '/周' : '';
+  return (m[0].replace(/\s+/g, '') + cn).slice(0, 24);
 }
 const URL_BLACKLIST = ['chrome:', 'chrome-extension:', 'javascript:', 'data:', 'file:', 'ws:', 'wss:', 'view-source:', 'about:', 'edge:', 'brave:'];
 function urlAllowed(url) {
@@ -923,14 +948,14 @@ function recSessionAdd(tabId, why) {
   if (!rec || !rec.active) return;
   rec.session = rec.session || [];
   const have = rec.session.find((x) => x.tabId === tabId);
-  if (have) { if (why && have.why === 'group' && why !== 'group') have.why = why; return; }
+  if (have) { if (why && (have.why === 'group' || have.why === 'chat') && why !== have.why) have.why = why; return; }
   rec.session.push({ tabId, url: '', why: why || 'group' });
   if (rec.session.length > 30) rec.session = rec.session.slice(-30);
   chrome.tabs.get(tabId).then((t) => { const x = rec && rec.session && rec.session.find((y) => y.tabId === tabId); if (x && t) { x.url = t.url || t.pendingUrl || ''; recSave(); } }).catch(() => {});
 }
 function recSessionSites() {
   const out = new Set();
-  for (const x of (rec && rec.session) || []) { const st = recSiteOf(x.url); if (st) out.add(st); }
+  for (const x of (rec && rec.session) || []) { if (x.why === 'chat') continue; const st = recSiteOf(x.url); if (st) out.add(st); }
   if (rec && rec.startTab && rec.startTab.url) { const st = recSiteOf(rec.startTab.url); if (st) out.add(st); }
   return out;
 }
@@ -987,20 +1012,26 @@ function recNetNote(r) {
 async function recBroadcast(on) {
   for (const tabId of [...recTabs]) { try { await chrome.tabs.sendMessage(tabId, { type: 'foxpaw.rec.state', on }); } catch { /* no probe there */ } }
 }
-async function recStart(name, source = 'human', startTab = null, agent = null) {
+// 1.33.2: the tab the owner talks to the agent in (a chat page in the group) is not part of the flow.
+// opts.skipTabId = that tab: never armed, its steps / navigations dropped, listed as 「与 Agent 对话 · 不录」;
+// the owner can still add it (foxpaw.rec.unskip), and an agent recording that operates it adds it itself.
+function recSkipped(tabId) { return !!(rec && Array.isArray(rec.skip) && rec.skip.includes(tabId)); }
+const agentLastTab = new Map(); // agentId -> the group tab it last read / operated (this browser, this SW life)
+async function recStart(name, source = 'human', startTab = null, agent = null, opts = {}) {
   const t = await listTabs();
-  let startTabId = agent && agent.tabId != null ? agent.tabId : null;
+  let startTabId = agent && agent.tabId != null ? agent.tabId : opts.startTabId != null ? opts.startTabId : null;
   if (startTabId === null) { try { const [at] = await chrome.tabs.query({ active: true, currentWindow: true }); if (at && t.assigned.some((x) => x.id === at.id)) startTabId = at.id; } catch { /* noop */ } }
   if (startTabId === null && t.assigned.length) startTabId = t.assigned[0].id;
   rec = { active: true, id: 'rec' + Date.now(), name: name || '', source, startTab, startTabId, scope: t.assigned.length, startedAt: new Date().toISOString(), steps: [], requests: [], truncated: {},
     ...(agent ? { agentId: agent.agentId || '', agentLabel: agent.agentLabel || '', goal: agent.goal || '', task: agent.task || '', loginPauses: 0 } : {}) };
   rec.session = []; rec.ask = []; rec.net = { armed: 0, fail: {}, events: 0 };
+  rec.skip = opts.skipTabId != null && opts.skipTabId !== startTabId && t.assigned.some((x) => x.id === opts.skipTabId) ? [opts.skipTabId] : [];
   recNet.clear(); recTabs.clear(); recNewTabs.clear(); recAskedNo.clear();
   await recSaveNow(); await recPublish();
   await recRegister(true);
   if (startTabId != null && t.assigned.some((x) => x.id === startTabId)) await recArmTab(startTabId, 'start');
-  for (const tab of t.assigned) if (tab.id !== startTabId) await recArmTab(tab.id, 'group');
-  await audit(`recording started: ${rec.name} (${t.assigned.length} tab(s) armed)`);
+  for (const tab of t.assigned) if (tab.id !== startTabId) { if (recSkipped(tab.id)) recSessionAdd(tab.id, 'chat'); else await recArmTab(tab.id, 'group'); }
+  await audit(`recording started: ${rec.name} (${t.assigned.length - rec.skip.length} tab(s) armed${rec.skip.length ? ', the chat tab left out' : ''})`);
 }
 async function recStop() {
   if (!rec) return null;
@@ -1056,6 +1087,24 @@ async function recEndOnDisconnect(reason, all) {
   await recPublish(); refreshAction();
   await audit(`${who}'s recording ended: ${REC_ABORT_CN[reason] || reason} (kept as a local draft, not resumed on reconnect)`);
   return true;
+}
+// 1.33.2: add a left-out tab to the running recording (the owner's 「也录这个」, or the recording agent operating it)
+async function recUnskip(tabId) {
+  if (!rec || !rec.active || !recSkipped(tabId)) return false;
+  rec.skip = rec.skip.filter((x) => x !== tabId);
+  await recArmTab(tabId, 'asked');
+  recSave(); await recPublish();
+  return true;
+}
+async function recNoteAgentTab(ctx, tabId) {
+  if (!ctx || !ctx.agentId || tabId == null) return;
+  agentLastTab.set(ctx.agentId, tabId);
+  if (rec && rec.active && rec.source === 'agent' && rec.agentId === ctx.agentId && recSkipped(tabId)) await recUnskip(tabId);
+}
+async function ownerActiveTabId() {
+  try { const [at] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); if (at) return at.id; } catch { /* noop */ }
+  try { const [at] = await chrome.tabs.query({ active: true, currentWindow: true }); if (at) return at.id; } catch { /* noop */ }
+  return null;
 }
 // local library entry for this recording (replaced by localId on save / re-stop)
 async function recLibraryPut(status) {
@@ -1157,6 +1206,7 @@ async function recOnNavigate(d, spa) {
   try { tab = await chrome.tabs.get(d.tabId); } catch { return; }
   await groupsReady();
   if (!tabAuthorized(tab)) return; // nothing about tabs outside the group is recorded at all
+  if (recSkipped(d.tabId)) return; // 1.33.2 the owner's chat-with-the-agent tab
   const q = d.transitionQualifiers || [];
   let cause = 'link';
   if (q.includes('from_address_bar') || REC_TYPED.test(d.transitionType || '')) cause = 'typed';
@@ -1234,7 +1284,7 @@ async function publishPending() {
 function relayApprovalOpen(id, meta) {
   try {
     wsSend({ type: 'approval.open', id, agent: meta.agent || '', agentId: meta.agentId || '', ttlMs: meta.ttlMs || CONFIRM_TTL_MS,
-             verb: meta.category || '', host: meta.host || '', title: meta.title || '', ...(meta.task ? { task: meta.task } : {}) });
+             verb: meta.category || '', host: meta.host || '', title: meta.title || '', ...(meta.task ? { task: meta.task } : {}), ...(meta.amount ? { amount: String(meta.amount).slice(0, 24) } : {}) });
   } catch { /* offline: panel-only, as before */ }
 }
 function relayApprovalReport(id, decision, extra) {
@@ -1408,7 +1458,7 @@ function waitConfirm(meta, ctx, timeoutMs = confirmTtl()) {
   if (ctx) { if (ctx.cancelled) return Promise.resolve({ approved: false, cancelled: true }); ctx.confirmIds.add(id); }
   return new Promise((resolve) => {
     const timer = setTimeout(() => { pendingConfirms.delete(id); clearNotice('fxn-' + id); publishPending(); relayApprovalReport(id, 'expired'); resolve({ approved: false, timeout: true }); }, timeoutMs);
-    pendingConfirms.set(id, { meta: { id, ...meta, ...who, expiresAt: Date.now() + timeoutMs }, resolve: (v) => { clearTimeout(timer); clearNotice('fxn-' + id); if (ctx) ctx.confirmIds.delete(id); resolve(v); } });
+    pendingConfirms.set(id, { meta: { id, ...meta, ...who, expiresAt: Date.now() + timeoutMs, openedAt: Date.now() }, resolve: (v) => { clearTimeout(timer); clearNotice('fxn-' + id); if (ctx) ctx.confirmIds.delete(id); resolve(v); } });
     publishPending();
     // a card waiting for approval is announced like a USER_STEP (system notice only with the permission)
     notifyOwner('fxn-' + id, `${who.agent || 'Agent'} 等你批准`, `${meta.title || meta.category || ''}${meta.host ? ' · ' + meta.host : ''}`, ctx && ctx.tabId != null ? ctx.tabId : null);
@@ -1700,12 +1750,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // approval login in this same browser (or an email-code login).
     } else if (msg.type === 'foxpaw.rec.hello') {
       await groupsReady();
-      return { on: !!(rec && rec.active && sender && sender.tab && tabAuthorized(sender.tab)) };
+      return { on: !!(rec && rec.active && sender && sender.tab && tabAuthorized(sender.tab) && !recSkipped(sender.tab.id)) };
     } else if (msg.type === 'foxpaw.rec.step') {
       const arrived = Date.now();
       await groupsReady();
       // a step from a tab outside the group is dropped (not stored at all)
       if (!(sender && sender.tab && tabAuthorized(sender.tab))) return { ok: false, dropped: true };
+      if (recSkipped(sender.tab.id)) return { ok: false, dropped: true, chat: true }; // 1.33.2 left out: talking to the agent is not the flow
       const st = { ...(msg.step || {}) };
       delete st.outOfGroup;
       // 1.29.1: the step's time = the page's event time (same machine clock), bounded to the last 5 s before it got
@@ -1744,10 +1795,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if ((await cfg()).access === 'off') return { ok: false, error: '已停用：先切到「只看」或「可操作」再录制' };
       if (rec && rec.pendingSave && !rec.active) await recDiscardToDraft(); // an unsaved recording is already a draft (我录的)
       if (rec && rec.active) return { ok: false, error: rec.source === 'agent' ? `${rec.agentLabel || 'Agent'} 正在录制，一台浏览器同时只能有一个录制` : '已经在录制了' };
-      let startTab = null;
-      try { const [at] = await chrome.tabs.query({ active: true, currentWindow: true }); if (at) startTab = { title: at.title || '', url: at.url || '' }; } catch { /* best-effort */ }
-      await recStart(msg.name, 'human', startTab);
-      return { ok: true };
+      let startTab = null, at = null;
+      try { [at] = await chrome.tabs.query({ active: true, currentWindow: true }); if (at) startTab = { title: at.title || '', url: at.url || '' }; } catch { /* best-effort */ }
+      // 1.33.2: started while an agent's question waits (the agent asked the owner to record) — the flow starts
+      // on the group tab that agent last worked on, and the tab the owner is on (where they talk to the agent)
+      // is left out, so the reply typed there never becomes a step
+      const opts = {};
+      const asks = [...pendingAsks.values()].map((p) => p.meta).filter((m) => m && m.agentId);
+      const lastAsk = asks[asks.length - 1];
+      const aTab = lastAsk ? agentLastTab.get(lastAsk.agentId) : null;
+      if (aTab != null && at && aTab !== at.id) {
+        try {
+          const t2 = await chrome.tabs.get(aTab);
+          await groupsReady();
+          if (t2 && tabAuthorized(t2)) { opts.startTabId = aTab; opts.skipTabId = at.id; startTab = { title: t2.title || '', url: t2.url || '' }; }
+        } catch { /* that tab is gone: start where the owner is */ }
+      }
+      await recStart(msg.name, 'human', startTab, null, opts);
+      return { ok: true, ...(opts.startTabId != null ? { startTabId: opts.startTabId, skipped: [opts.skipTabId] } : {}) };
+    } else if (msg.type === 'foxpaw.rec.unskip') {
+      return { ok: await recUnskip(Number(msg.tabId)) };
     } else if (msg.type === 'foxpaw.rec.startHere') {
       // group the current tab into the FoxPaw group, then start —
       // the panel's gate card offers this when the start page is out of scope.
@@ -1938,7 +2005,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
    executeScript hit-test on a raw-CDP mousePressed / Enter key (a few ms)
    — the same mechanism a ref click already used for its preflight. */
 
-const CONFIRM_TTL_MS = 50000;   // card lifetime; relay waits this + grace (never less) — 
+const CONFIRM_TTL_MS = 300000;  // 1.33.2 card lifetime 5 min (was 50 s: too short to answer on a phone); relay waits this + grace (never less) — 
 // Session data (cookies, web storage, IndexedDB, Cache Storage) is SENSITIVE:
 // never a read; refused in 只看; asks the owner in 可操作. Mirrors the relay's
 // CDP_SENSITIVE_RE (the relay keeps the same list).
@@ -2178,6 +2245,10 @@ function pageElementInfo(sel, secretSrc) {
   }
   return {
     found: true, tag: t.tagName, type, role, name: name.slice(0, 120), icon: icon.slice(0, 300), buttonish, field, secret, secretKind,
+    // 1.33.2 the text of the dialog / modal the element sits in (what a bare 「Confirm」 confirms)
+    ctx: (() => { const d = t.closest && t.closest('dialog,[role="dialog"],[role="alertdialog"],[aria-modal="true"],[class*="modal" i],[class*="dialog" i],[class*="popup" i]'); return d ? String(d.innerText || d.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 600) : ''; })(),
+      // …or, outside any dialog, the small block around it (a plan card: 「Pro · $30/月 · Subscribe」)
+      near: (() => { if (t.closest && t.closest('dialog,[role="dialog"],[role="alertdialog"],[aria-modal="true"],[class*="modal" i],[class*="dialog" i],[class*="popup" i]')) return ''; let p = t.parentElement; for (let i = 0; p && p !== document.body && i < 4; i++, p = p.parentElement) { const x = String(p.innerText || p.textContent || '').replace(/\s+/g, ' ').trim(); if (x.length > 300) break; if (/[$€£¥￥]\s?\d|\d\s?(元|美元)|\/\s?(mo|month|月|年|yr)/i.test(x)) return x.slice(0, 300); } return ''; })(),
     fref: (t.getAttribute && t.getAttribute('data-foxpaw-ref')) || '', inner: !!(sel && sel.inner),
     inForm: !!form, formAction: form ? (form.action || '') : '', submitName: submitName.slice(0, 120),
     textarea: t.tagName === 'TEXTAREA' || !!t.isContentEditable, navOnly, submitType,
@@ -2202,6 +2273,11 @@ function classifyElement(info) {
     // submit button) only opens a page — 「商品发布」 in a side menu is not a publish.
     // pay / grant / delete words are never relaxed by this.
     if (cat === 'submit' && info.navOnly) return 'normal';
+    // 1.33.2 a confirm-like button inside a dialog that is about buying (price / billing period) = pay
+    if ((cat === 'submit' || cat === 'normal') && (info.buttonish || info.submitType || info.role === 'button')) {
+      if (info.ctx && payContext(info.ctx) && (cat === 'submit' || PAY_BTN_NEAR.test(info.name))) return 'pay';
+      if (!info.ctx && info.near && PAY_BTN_NEAR.test(info.name) && payContext(info.near + ' ' + info.name)) return 'pay';
+    }
     if (cat !== 'normal') return cat;
     return (info.buttonish && classifyIcon(info.icon)) || 'normal';
   }
@@ -2441,6 +2517,7 @@ const approvedOnce = new Set(); // `${family}|${origin}` approve-once per relay 
 function approvalNeeded(c, rule, category, basis, once) {
   // returns true when the owner must be asked
   if (category === 'normal') return false;
+  if (category === 'pay') return true; // 1.33.2 every payment asks, whatever the rules / remembered / trust
   if (category === 'login' || category === 'vault') return true; // 1.26 a saved login is used / stored only with a card, or inside trust
   if (category === 'stock') return true; // 1.29 商品卡密 of an untrusted agent: one card per intent
   if (category === 'session' || category === 'upload' || category === 'tab') return !(once && approvedOnce.has(once));
@@ -2475,6 +2552,7 @@ async function execCore(ctx, act) {
   let tab = null;
   if (act.scope === 'control') tab = await assertControllable(ctx.tabId);
   else if (act.scope === 'group') tab = await assertInGroup(ctx.tabId);
+  if (tab) await recNoteAgentTab(ctx, tab.id); // 1.33.2
   // 4 site
   if (act.cls !== 'always' && tab && /^https?:/.test(tab.url || '') && siteRule(c, originOf(tab.url)) === 'block') {
     throw err('SITE_BLOCKED', `site blocked by rule: ${originOf(tab.url)}`);
@@ -2488,7 +2566,9 @@ async function execCore(ctx, act) {
     if (r) { cat = r.category || 'normal'; meta = r; }
   }
   // 6 approve
-  if (cat === 'pay' || cat === 'grant') throw await userStepErr(ctx, cat, `${cat} actions are never executed by an agent — the owner must do this step personally`, meta && meta.title);
+  // 1.33.2: a payment is no longer a hard stop — it always asks the owner (a card every
+  // time: never remembered, never inside trust / 「这次都放行」 / a 5-minute window); approved, the agent clicks it
+  if (cat === 'grant') throw await userStepErr(ctx, cat, `${cat} actions are never executed by an agent — the owner must do this step personally`, meta && meta.title);
   if (cat === 'secret') {
     recAgentLoginPause(ctx, tab); // an agent recording hit a login — pause, the owner logs in, nothing of it is recorded
     throw await userStepErr(ctx, 'secret', 'this targets a secret field (password / one-time code / card) — the owner must type it personally', meta && meta.title);
@@ -2526,8 +2606,9 @@ async function execCore(ctx, act) {
   // 1.26 a saved login (login) / storing one (vault) — inside trust no card; a card when the owner
   // must decide on replacing their own saved login (meta.forceCard). meta.host = the site it is for.
   const vaultCat = VAULT_CATS.includes(cat);
-  const iKey = vaultCat ? null : intentKey(ctx, cat, cardHost);
-  const win = !needCard ? null : vaultCat ? (meta.forceCard ? null : trustScope(ctx, meta.host || cardHost))
+  const payCat = cat === 'pay';
+  const iKey = vaultCat || payCat ? null : intentKey(ctx, cat, cardHost);
+  const win = !needCard || payCat ? null : vaultCat ? (meta.forceCard ? null : trustScope(ctx, meta.host || cardHost))
     : (windowFor(ctx, cat, cardHost) || trustFor(ctx, cat, cardHost, tab)
       || (intentHas(iKey) ? { id: 'intent', basis: 'intent', label: '已批准过的同类操作' } : null));
   if (vaultCat) ctx.vaultBasis = win ? { basis: win.basis, label: win.label, id: win.id } : { basis: 'card' };
@@ -2541,11 +2622,11 @@ async function execCore(ctx, act) {
   } else if (meta && !ownerFill && approvalNeeded(c, rule, cat, meta.basis, meta.once)) {
     const epoch0 = ctx.tabId != null ? (epochs.get(ctx.tabId) || 0) : 0;
     const res = await waitConfirm({
-      kind: 'gate', category: cat, basis: meta.basis || '', origin, title: meta.title || `${cat} on ${origin}`,
+      kind: 'gate', category: cat, basis: payCat ? '' : (meta.basis || ''), origin, title: meta.title || `${cat} on ${origin}`, ...(payCat ? { pay: true, amount: meta.amount || '' } : {}),
       detail: (meta.detail || meta.title || '') + (iKey ? `\n批准后，${ctx.task ? '本任务内' : '接下来 30 分钟内'}它在 ${cardHost} 的同类操作（${CAT_CN_EXT[cat] || cat}）不再逐次询问` : ''),
       intent: !!iKey, host: meta.host || cardHost, page: ((tab && tab.title) || '').slice(0, 60),
       tabId: ctx.tabId, task: ctx.task || '',
-      windowable: !!(ctx.task && ctx.agentId && !ctx.local && WINDOW_VERBS.includes(cat)),
+      windowable: !payCat && !!(ctx.task && ctx.agentId && !ctx.local && WINDOW_VERBS.includes(cat)),
     }, ctx);
     if (!res.approved) {
       if (res.cancelled) throw err('CONFIRM_CANCELLED', 'the relay gave up waiting — this command is void and will never execute');
@@ -2993,6 +3074,9 @@ function fpPage(op, a) {
     const submitType = !!(form && (t.type === 'submit' || t.type === 'image') && /^(BUTTON|INPUT)$/.test(t.tagName));
     return {
       found: true, tag: t.tagName, type: ty, role, name: clsName(t).slice(0, 120), icon: icon.slice(0, 300),
+      ctx: (() => { const d = t.closest && t.closest('dialog,[role="dialog"],[role="alertdialog"],[aria-modal="true"],[class*="modal" i],[class*="dialog" i],[class*="popup" i]'); return d ? String(d.innerText || d.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 600) : ''; })(),
+      // …or, outside any dialog, the small block around it (a plan card: 「Pro · $30/月 · Subscribe」)
+      near: (() => { if (t.closest && t.closest('dialog,[role="dialog"],[role="alertdialog"],[aria-modal="true"],[class*="modal" i],[class*="dialog" i],[class*="popup" i]')) return ''; let p = t.parentElement; for (let i = 0; p && p !== document.body && i < 4; i++, p = p.parentElement) { const x = String(p.innerText || p.textContent || '').replace(/\s+/g, ' ').trim(); if (x.length > 300) break; if (/[$€£¥￥]\s?\d|\d\s?(元|美元)|\/\s?(mo|month|月|年|yr)/i.test(x)) return x.slice(0, 300); } return ''; })(),
       buttonish: t.tagName === 'BUTTON' || inputBtn || /^(button|menuitem)$/.test(role), field: isField(el), secret: isSecret(el),
       secretKind: isSecret(el) ? secretKindOf(el) : '',
       inForm: !!form, formAction: form ? (form.action || '') : '', textarea: el.tagName === 'TEXTAREA' || !!el.isContentEditable,
@@ -5110,6 +5194,10 @@ async function elementInfo(tabId, sel) {
 }
 function clickMeta(tab, info, cat, via) {
   const name = String((info && info.name) || (info && info.frame ? '内嵌框架里的元素' : '无名按钮')).slice(0, 30);
+  if (cat === 'pay') { // 1.33.2 every time a card, marked 付款 with the amount / period when the page shows one
+    const amount = payAmount(`${(info && (info.ctx || info.near)) || ''} ${(info && info.name) || ''}`);
+    return { category: 'pay', title: `点击「${name}」${amount ? `（${amount}）` : ''}`, detail: [via, ((info && (info.ctx || info.near)) || '').slice(0, 120)].filter(Boolean).join(' · '), amount, basis: '' };
+  }
   return { category: cat, title: `点击「${name}」`, detail: via || '', basis: `${originOf(tab.url)}|${cat}|${(info && info.formAction) || ''}|${name}` };
 }
 async function cdpClassify(tab, method, params, ctx) {
@@ -6378,10 +6466,13 @@ const handlers = {
   async recordStart(msg, ctx) {
     return execCore(ctx, { cls: 'write', scope: 'group', run: async (tab) => {
       if (rec && (rec.active || rec.pendingSave)) throw err('REC_BUSY', rec.source === 'agent' ? `${rec.agentLabel || 'an agent'} is already recording in this browser` : 'the owner is recording in this browser right now');
+      // 1.33.2: the owner is usually on the page where they talk to this agent — that tab is left out
+      const own = await ownerActiveTabId();
       await recStart(String(msg.name || '').slice(0, 40), 'agent', { title: (tab && tab.title) || '', url: (tab && tab.url) || '' },
-        { agentId: ctx.agentId, agentLabel: ctx.agentLabel, goal: String(msg.goal || '').slice(0, 200), task: ctx.task, tabId: tab ? tab.id : null });
+        { agentId: ctx.agentId, agentLabel: ctx.agentLabel, goal: String(msg.goal || '').slice(0, 200), task: ctx.task, tabId: tab ? tab.id : null },
+        { skipTabId: own != null && tab && own !== tab.id ? own : null });
       await recPublish(); refreshAction();
-      return { recording: true, startTab: tab ? tab.id : null, armedTabs: rec.scope };
+      return { recording: true, startTab: tab ? tab.id : null, armedTabs: rec.scope - (rec.skip || []).length, ...((rec.skip || []).length ? { leftOut: rec.skip, note: "the owner's active tab (where they talk to you) is not recorded; operate it with a tool to include it" } : {}) };
     }, audit: () => `agent recording started: ${String(msg.goal || '').slice(0, 60)}` });
   },
   async recordStop(msg, ctx) {
@@ -6400,7 +6491,7 @@ const handlers = {
   async ask({ question, options }, ctx) {
     return execCore(ctx, { cls: 'read', scope: 'none', run: async () => {
       // v1.17: the card says who asks and until when (ui-interaction #10)
-      const res = await waitAsk({ question, options: options || null, agent: ctx.agentLabel || '', until: Date.now() + 300000 }, ctx);
+      const res = await waitAsk({ question, options: options || null, agent: ctx.agentLabel || '', agentId: ctx.agentId || '', until: Date.now() + 300000 }, ctx);
       if (res.cancelled) throw err('CONFIRM_CANCELLED', 'the relay gave up waiting');
       if (res.timeout) throw err('ASK_TIMEOUT', 'user did not answer in time');
       return { answer: res.answer };

@@ -512,6 +512,11 @@
   .rsess .tr .u { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .rsess .tr .why { flex:none; font-size:11px; padding:1px 7px; border-radius:var(--r-pill); background:var(--fp-fill); color:var(--fp-text-2); }
   .rsess .tr .why.g { background:var(--fp-green-soft); color:var(--fp-green); }
+  .rsess .tr .link { flex:none; font-size:11px; padding:0 2px; }
+  #recPendSlot:empty { display:none; }
+  .paytag { display:inline-flex; gap:6px; align-items:center; margin:2px 0 4px; font-size:var(--fs-sm); }
+  .paytag b { background:var(--fp-red-soft, #fde8e6); color:var(--fp-red, #c0392b); border-radius:var(--r-pill); padding:1px 8px; font-weight:600; }
+  .paytag span { font-weight:600; }
   .askbar { position:fixed; left:10px; right:10px; bottom:64px; z-index:30; background:#20242b; color:#fff; border-radius:14px; padding:12px 14px; box-shadow:0 10px 30px rgba(0,0,0,.25); }
   .askbar b { font-size:14px; font-weight:700; display:block; }
   .askbar p { font-size:var(--fs-sm); color:rgba(255,255,255,.72); margin-top:4px; line-height:1.5; word-break:break-all; }
@@ -880,6 +885,7 @@
 
       <!-- 我来录: the recording screen and the save page replace the home while the owner records -->
       <section class="view" id="v-rec" aria-label="录制">
+        <div class="keep" id="recPendSlot"></div>
         <div id="recLiveView">
           <div class="rechead"><span class="recdot2" id="recDot" aria-hidden="true"></span>
             <div><div class="rlab" id="recLab">录制中</div><div class="timer" id="recTimer">00:00</div></div>
@@ -987,7 +993,6 @@
         <div class="row link" id="meNotifyTest"><span class="t sp">发一条测试通知</span><span class="chev">›</span></div>
         <div class="row link" id="meDiag"><span class="t sp">导出诊断信息</span><span class="chev">›</span></div>
       </div>
-      <p class="foot" id="meFoot">狐爪</p>
     </main>
   </div>
 </div>

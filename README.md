@@ -62,7 +62,7 @@ Manual setup for each client is in [`examples/`](examples/); the core is just th
 Rules built into the system, not promises:
 
 - **Sessions, not passwords.** Passwords and cookies never leave your computer.
-- **Payments are always yours.** Card numbers, payment passwords and the pay step are always handed back to you.
+- **Payments always need your approval.** Every payment, subscription or upgrade click asks you on a card first (amount shown), every time; card numbers and payment passwords are always yours to type.
 - **Passwords and verification codes are yours by default** — unless you choose to trust a specific agent with saved logins; even then the extension fills them locally and the agent only ever sees `•••`. Human-verification checks are always left to you.
 - **The tab group is the boundary.** The agent can only see and act in tabs you put in the FoxPaw tab group. A newly invited agent gets no browser at all and starts read-only; you grant more per agent.
 - **Ask before changing things.** Submits, deletes and authorizations pop up an approval card; *Pause all* stops every agent at once.

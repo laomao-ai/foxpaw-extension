@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FoxPaw · 狐爪",
-  "version": "1.33.1",
+  "version": "1.33.2",
   "description": "云端 Agent 在你本地浏览器里的眼和手：借你的登录态读页、填表、操作。站点白名单、动作分级、关键动作由人确认。",
   "icons": {
     "128": "icons/foxpaw-128.png",

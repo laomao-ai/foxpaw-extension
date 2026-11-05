@@ -263,7 +263,12 @@ function render() {
   const recMode = ownerRec();
   $('v-agent').classList.toggle('on', !recMode);
   $('v-rec').classList.toggle('on', recMode);
-  if (recMode) renderRecView(); else renderAgent();
+  // 1.33.2: what waits on the owner (an agent's question, approvals, user steps) stays answerable while
+  // the owner records — the one #pending box moves into the recording screen instead of hiding with
+  // the home. The side panel is an extension page: nothing typed here is ever a recorded step.
+  const pend = $('pending'), slot = recMode ? $('recPendSlot') : $('vaultOffer');
+  if (pend && slot && (recMode ? pend.parentElement !== slot : pend.previousElementSibling !== slot)) { if (recMode) slot.append(pend); else slot.after(pend); }
+  if (recMode) { renderPending(); renderRecView(); } else renderAgent();
   renderIsland(roster());
   renderAskBar();
   renderFooter();
@@ -302,7 +307,7 @@ function userStepsShown() {
   return steps.filter((u) => u.tabId == null || !needTabs.has(u.tabId));
 }
 /* ---------- 需要你处理 · 要批准 ---------- */
-const VERB_TEXT = { submit: '提交', delete: '删除', write: '填写', upload: '上传文件', eval: '在页面运行脚本', tab: '使用一个未授权的标签', session: '读写登录数据', unknown: '做一个看不清的操作', otp: '填写验证码', gate: '做一个敏感操作', login: '用你的已存登录', vault: '保存登录凭证' };
+const VERB_TEXT = { pay: '付款', submit: '提交', delete: '删除', write: '填写', upload: '上传文件', eval: '在页面运行脚本', tab: '使用一个未授权的标签', session: '读写登录数据', unknown: '做一个看不清的操作', otp: '填写验证码', gate: '做一个敏感操作', login: '用你的已存登录', vault: '保存登录凭证' };
 function tabTitleOf(tabId) { const t = D.tabs.find((x) => x.id === tabId); return t ? (t.title || t.url || '') : ''; }
 function renderPending() {
   const confs = D.ui.pendingConfirms || [];
@@ -335,11 +340,12 @@ function renderPending() {
     const where = [p.page || p.host || hostOf(p.origin || ''), p.detail && p.detail !== p.title ? p.detail : ''].filter(Boolean).join(' · ');
     const otp = p.category === 'otp' || p.otp;
     const card = el(`<div class="card needc appr" data-id="${esc(p.id)}">
-      <div class="k">需要你处理 · ${esc(when(p.expiresAt ? p.expiresAt - 50000 : Date.now()) || '刚刚')}</div>
+      <div class="k">需要你处理 · ${esc(when(p.openedAt || Date.now()) || '刚刚')}</div>
       <h3>${esc(who)} 要${esc(verb)}${what && what !== verb ? `：${esc(what)}` : ''}</h3>
-      <p>${p.category === 'login' ? '密码由 FoxPaw 在本机填入，Agent 看不到；只用这一次。' : p.category === 'vault' ? '密码只加密存在这台浏览器，Agent 之后可以用它登录（看不到密码）。' : otp ? '允许后，本任务里的验证码由它代填，不再打断你。' : p.category === 'delete' ? '删除后可能无法恢复。' : p.category === 'submit' ? '提交后通常不能撤回。' : '批准后它才会继续。'}</p>
+      ${p.category === 'pay' ? `<div class="paytag"><b>付款</b>${p.amount ? `<span>${esc(p.amount)}</span>` : ''}</div>` : ''}
+      <p>${p.category === 'pay' ? '批准后它会替你点下去，可能马上扣费。付款每次都要你批准，不会记住，信任也不免。' : p.category === 'login' ? '密码由 FoxPaw 在本机填入，Agent 看不到；只用这一次。' : p.category === 'vault' ? '密码只加密存在这台浏览器，Agent 之后可以用它登录（看不到密码）。' : otp ? '允许后，本任务里的验证码由它代填，不再打断你。' : p.category === 'delete' ? '删除后可能无法恢复。' : p.category === 'submit' ? '提交后通常不能撤回。' : '批准后它才会继续。'}</p>
       ${where ? `<div class="tabref"><span class="sq sm">${esc(siteLetter({ url: p.origin, title: p.page }))}</span><span class="ell" title="${esc(where)}">${esc(where)}</span></div>` : ''}
-      ${p.windowable ? '<label class="chk"><input type="checkbox" data-a="win"> <span>接下来 5 分钟内，本任务的同类操作不再问</span></label><div class="oncehint">「这次都放行」：本次任务里的填写 / 提交 / 删除 / 运行脚本都不再问，任务结束就失效；付款和本机文件仍交你。</div>'
+      ${p.windowable ? '<label class="chk"><input type="checkbox" data-a="win"> <span>接下来 5 分钟内，本任务的同类操作不再问</span></label><div class="oncehint">「这次都放行」：本次任务里的填写 / 提交 / 删除 / 运行脚本都不再问，任务结束就失效；付款每次都要你批准，本机文件仍交你。</div>'
         : p.basis ? '<label class="chk"><input type="checkbox" data-a="rem"> <span>记住同类，下次不再问</span></label>' : ''}
       <div class="acts"><button class="btn pri" data-a="ok">${otp ? '允许本任务代填' : '批准'}</button>${p.windowable ? '<button class="btn" data-a="once" title="本次任务里的填写 / 提交 / 删除 / 运行脚本都不再问，任务结束就失效">这次都放行</button>' : ''}${p.tabId != null ? '<button class="btn" data-a="look">去看看</button>' : '<button class="btn" data-a="no">拒绝</button>'}<button class="btn stopx" data-a="stop">让它停下</button></div>
     </div>`);
@@ -526,7 +532,7 @@ function renderDomNote() {
   $('domNoteX').onclick = () => { D.domNote = null; chrome.storage.local.remove('foxpawDomainNote').catch(() => {}); renderDomNote(); };
 }
 // 1.33.0 (relay 3.8.7): least privilege, said once when a new agent first shows up on this browser (× = seen)
-const PRIVACY_LINE = '它默认看不到任何页面，只能看你逐个授权的标签，随时可以收回；付款始终由你来；密码、验证码等默认由你来，除非你主动信任某个 Agent；每一步都有记录可查。';
+const PRIVACY_LINE = '它默认看不到任何页面，只能看你逐个授权的标签，随时可以收回；付款每次都要你批准；密码、验证码等默认由你来，除非你主动信任某个 Agent；每一步都有记录可查。';
 function renderPrivNote() {
   const box = $('privNote');
   if (!box) return;
@@ -605,7 +611,7 @@ function renderAskBar() {
   $('askYes').onclick = () => send({ type: 'foxpaw.rec.join', tabId: a.tabId, join: true }).then((x) => { if (!x || !x.ok) showToast('没加上：' + ((x && x.error) || '')); }).catch(() => {});
   $('askNo').onclick = () => send({ type: 'foxpaw.rec.join', tabId: a.tabId, join: false }).catch(() => {});
 }
-const SESS_WHY = { start: ['起点', ''], group: ['组内标签', ''], opener: ['从录制标签打开 · 自动加入', 'g'], site: ['同主域 · 自动加入', 'g'], asked: ['你选择加入', 'g'] };
+const SESS_WHY = { start: ['起点', ''], group: ['组内标签', ''], opener: ['从录制标签打开 · 自动加入', 'g'], site: ['同主域 · 自动加入', 'g'], asked: ['你选择加入', 'g'], chat: ['与 Agent 对话 · 不录', ''] };
 
 /* ---------- 待你审阅: drafts an agent made; only the owner accepts / rejects / asks for a re-record ---------- */
 function renderDrafts() {
@@ -638,7 +644,7 @@ function trustTag(a) {
   if (!t || (t.mode !== 'all' && t.mode !== 'sites')) return '';
   const sites = Array.isArray(t.sites) ? t.sites : [];
   const txt = t.mode === 'all' ? '已信任·全部' : `已信任·${sites.length === 1 ? sites[0] : sites.length + '站'}`;
-  const tip = t.mode === 'all' ? '信任全部网站：填写 / 提交 / 删除 / 运行脚本不再逐次问你，付款和本机文件仍交你' : `信任这些网站（含子域）：${sites.join('、')}`;
+  const tip = t.mode === 'all' ? '信任全部网站：填写 / 提交 / 删除 / 运行脚本不再逐次问你；付款每次都要你批准，本机文件仍交你' : `信任这些网站（含子域）：${sites.join('、')}`;
   return `<span class="trusttag" title="${esc(tip)}">${esc(txt)}</span>`;
 }
 
@@ -1338,7 +1344,11 @@ function renderRecView() {
     $('recNet').innerHTML = nreq ? `${r.live || 0} 步 · <b>${nreq} 个网络请求</b>（含响应摘要）` : esc(r.netNote || `${r.live || 0} 步 · 还没有网络请求`);
     const sess = Array.isArray(r.session) ? r.session : [];
     $('recSess').classList.toggle('hidden', sess.length < 2);
-    if (changed('recsess', sess)) $('recSessList').innerHTML = sess.map((x) => { const w = SESS_WHY[x.why] || [x.why, '']; return `<div class="tr"><span class="u">${esc(x.url || '新标签')}</span><span class="why ${w[1]}">${esc(w[0])}</span></div>`; }).join('');
+    if (changed('recsess', sess)) {
+      $('recSessList').innerHTML = sess.map((x) => { const w = SESS_WHY[x.why] || [x.why, '']; return `<div class="tr"><span class="u">${esc(x.url || '新标签')}</span><span class="why ${w[1]}">${esc(w[0])}</span>${x.why === 'chat' ? `<button class="link" data-unskip="${esc(String(x.tabId))}" title="这个标签上的操作也录进流程">也录</button>` : ''}</div>`; }).join('');
+      // 1.33.2 the chat-with-the-agent tab is left out; one tap adds it back
+      for (const b of $('recSessList').querySelectorAll('[data-unskip]')) b.onclick = () => send({ type: 'foxpaw.rec.unskip', tabId: Number(b.dataset.unskip) }).catch(() => {});
+    }
     const outNow = D.cur && !inMine(D.cur);
     $('recWarn').classList.toggle('hidden', !outNow);
     $('recWarn').textContent = outNow ? '你正在看的标签不在 FoxPaw 组里，它上面的操作不会被录。' : '';
@@ -1537,7 +1547,6 @@ function renderMe() {
   $('meDevice').textContent = D.ui.deviceLabel || '—';
   $('meConn').textContent = connShort(conn);
   $('meVer').textContent = 'v' + (conn.version || chrome.runtime.getManifest?.().version || '');
-  $('meFoot').textContent = '狐爪 v' + (conn.version || '') + (conn.relayVersion ? ' · 中继 v' + conn.relayVersion : '');
   document.querySelectorAll('#sensSeg button').forEach((b) => b.classList.toggle('on', b.dataset.v === (D.cfg.sensitive || 'ask')));
   const rules = Object.entries(D.cfg.siteRules || {});
   $('rulesCount').textContent = `${rules.length} 条`;
