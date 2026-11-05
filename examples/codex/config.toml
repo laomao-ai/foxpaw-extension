@@ -1,0 +1,8 @@
+# Codex（CLI / IDE 扩展 / 桌面应用共用）：追加到 ~/.codex/config.toml
+# 推荐把令牌放在环境变量里：export FOXPAW_TOKEN=<token>
+[mcp_servers.foxpaw]
+url = "https://foxpaw.aiyuancat.com/mcp"
+bearer_token_env_var = "FOXPAW_TOKEN"
+# 不想用环境变量时，改用下面这一行（并删掉上面的 bearer_token_env_var）：
+# http_headers = { "Authorization" = "Bearer <token>" }
+tool_timeout_sec = 120

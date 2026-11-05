@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "FoxPaw · 狐爪",
+  "version": "1.33.1",
+  "description": "云端 Agent 在你本地浏览器里的眼和手：借你的登录态读页、填表、操作。站点白名单、动作分级、关键动作由人确认。",
+  "icons": {
+    "128": "icons/foxpaw-128.png",
+    "16": "icons/foxpaw-16.png",
+    "32": "icons/foxpaw-32.png",
+    "48": "icons/foxpaw-48.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/foxpaw-16.png",
+      "32": "icons/foxpaw-32.png"
+    },
+    "default_title": "FoxPaw · 狐爪"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "vaultcatch.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "activeTab",
+    "scripting",
+    "storage",
+    "sidePanel",
+    "alarms",
+    "webNavigation",
+    "debugger",
+    "notifications",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsqmc14PsvADjtJjp20Qs9EstG9ooTC9T+9bZcSuW3+bslC51d6iknCzI2/b0MpFi8ulDW8XJ2UiEKcSCNla43OKRSrEmZsas8DlSvooIIDRaJlFTqGEe/gxnXPRC2GJF0s9aSofJkN8qZxCabDheyPtOvV0L13eOgY7Pc5eHHkjVuW6BsmUnp83IRaOGseOGIA7OBXS8bfbmblfBj/c9mprkSw2fr1YRB6wGnS2qjHKWY7GxtXPRu/skLf1BsVpzf2LMVzuRpV9sBA5r0kAkbWOvx+/2nq9Bm9I2G97uOACnnSsEvofj+CbnTf/3hlFdjQjy9c+GFEZ6OcvoyXUspwIDAQAB"
+}

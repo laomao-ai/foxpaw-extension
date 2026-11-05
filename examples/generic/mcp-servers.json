@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "foxpaw": {
+      "type": "streamableHttp",
+      "url": "https://foxpaw.aiyuancat.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
+    }
+  }
+}

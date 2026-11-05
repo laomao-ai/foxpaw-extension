@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "foxpaw": {
+      "url": "https://foxpaw.aiyuancat.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
+    }
+  }
+}

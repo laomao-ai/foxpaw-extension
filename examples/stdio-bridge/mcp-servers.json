@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "foxpaw": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://foxpaw.aiyuancat.com/mcp",
+        "--header",
+        "Authorization:${FOXPAW_AUTH}"
+      ],
+      "env": {
+        "FOXPAW_AUTH": "Bearer <token>"
+      }
+    }
+  }
+}
