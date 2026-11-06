@@ -648,12 +648,13 @@ function renderDrafts() {
 }
 
 // 1.25 a small 「已信任」 tag on a trusted agent's row (全部网站 / N 站); 「⋯ → 撤销信任」 revokes it
-function trustTag(a) {
+function trustTag(a, acc) {
   const t = a && a.trust;
-  if (!t || (t.mode !== 'all' && t.mode !== 'sites')) return '';
+  // 1.34.2 (relay 3.8.20): 可操作 but trusted nowhere = read-only everywhere — say so on the row
+  if (!t || (t.mode !== 'all' && t.mode !== 'sites')) return acc === 'write' ? '<span class="trusttag ro" title="还没信任它在任何网站操作：现在只能读页面。点右边的权限按钮选「信任当前网站」或「信任全部网站」">未信任·只能读</span>' : '';
   const sites = Array.isArray(t.sites) ? t.sites : [];
   const txt = t.mode === 'all' ? '已信任·全部' : `已信任·${sites.length === 1 ? sites[0] : sites.length + '站'}`;
-  const tip = t.mode === 'all' ? '信任全部网站：填写 / 提交 / 删除 / 运行脚本不再逐次问你；付款每次都要你批准，本机文件仍交你' : `信任这些网站（含子域）：${sites.join('、')}`;
+  const tip = t.mode === 'all' ? '信任全部网站：处处可操作，填写 / 提交 / 删除 / 运行脚本不再逐次问你；付款每次都要你批准，本机文件仍交你' : `只在这些网站（含子域）可操作，其他网站只能读：${sites.join('、')}`;
   return `<span class="trusttag" title="${esc(tip)}">${esc(txt)}</span>`;
 }
 
@@ -719,7 +720,7 @@ function agentCard(a, tasks, access, presMap) {
   const card = el(`<div class="agent agrow ${st}${openAgents.has(a.label) ? ' open' : ''}">
     <div class="ahead"><span class="av agav" style="--c:${color}">${avInner(a.label)}</span>
       <div class="main">
-        <div class="r1"><b title="${esc(a.label)}">${esc(a.label)}</b><span class="sw ${stw[0]}"><i class="sd" aria-hidden="true"></i>${stw[1]}</span>${trustTag(a)}</div>
+        <div class="r1"><b title="${esc(a.label)}">${esc(a.label)}</b><span class="sw ${stw[0]}"><i class="sd" aria-hidden="true"></i>${stw[1]}</span>${trustTag(a, acc)}</div>
         <div class="r2">${esc(line)}</div>
       </div>
       ${cap}
@@ -759,7 +760,7 @@ function agentCard(a, tasks, access, presMap) {
       <div class="seg accseg sm" role="radiogroup" aria-label="${esc(a.label)} 的权限">${['off', 'read', 'write'].map((v) => `<button type="button" role="radio" data-p="${v}" data-v="${v}" aria-checked="${acc === v}" class="${acc === v ? 'on' : ''}"${acc ? '' : ' disabled'}>${PERM_TEXT[v]}</button>`).join('')}</div>
       ${acc ? '' : '<div class="mnote">中继还没升级到 3.6.1，权限先在控制台改</div>'}
       <div class="mh">信任</div>
-      ${radio('none', tMode === 'none', '不信任', '每次问我')}
+      ${radio('none', tMode === 'none', '不信任', '只能读')}
       ${radio('site', tMode === 'site', '信任当前网站', cur ? esc(cur.site) : '先打开一个授权标签', !cur)}
       ${radio('all', tMode === 'all', '信任全部网站', '')}
       ${trSites.length ? `<div class="mnote" title="${esc(trSites.join('、'))}">已信任 ${esc(trSites.length > 3 ? trSites.slice(0, 3).join('、') + ` 等 ${trSites.length} 个` : trSites.join('、'))}</div>` : ''}
@@ -785,12 +786,12 @@ function agentCard(a, tasks, access, presMap) {
       const v = b.dataset.t;
       if (v === 'all' && tMode === 'all') { menuFor = null; render(); return; }
       if (v === 'none' && tMode === 'none') { menuFor = null; render(); return; }
-      if (v === 'all' && !confirm(`信任「${a.label}」在全部网站免审批？付款每次都要你批准，随时可改回。`)) return;
+      if (v === 'all' && !confirm(`信任「${a.label}」在全部网站操作并免审批？付款每次都要你批准，随时可改回。`)) return;
       menuFor = null; render();
       const r = await send({ type: 'foxpaw.agentTrust', agentId: a.id, agent: a.label, mode: v, confirm: v === 'all', tabId: cur ? cur.tabId : null })
         .catch((x) => ({ ok: false, error: String(x.message || x) }));
       if (!(r && r.ok)) { showToast('没改成：' + panelErr(r && r.error)); return; }
-      showToast(v === 'none' ? `${a.label} · 不信任（每次问我）` : v === 'all' ? `${a.label} · 信任全部网站` : `${a.label} · 信任 ${r.site || (cur && cur.site) || '当前网站'}`, 2000);
+      showToast(v === 'none' ? `${a.label} · 不信任（只能读）` : v === 'all' ? `${a.label} · 信任全部网站` : `${a.label} · 信任 ${r.site || (cur && cur.site) || '当前网站'}`, 2000);
     }; });
     // 1.31.2: 改名 (= console Agent 详情「名称」) — written to the relay; names are unique per account
     m.querySelector('[data-a=rename]').onclick = async (e) => {

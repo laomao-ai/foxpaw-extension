@@ -11,7 +11,7 @@ if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
 }
 
 const GROUP_TITLE = 'FoxPaw';
-const VERSION = '1.34.1';
+const VERSION = '1.34.2';
 // 1.17 录制版: the flow format / conversion / Playwright export
 // live in flow.js (pure, shared with Node tests and tools)
 const FF = (() => { try { if (typeof importScripts === 'function' && !self.FoxFlow) importScripts('flow.js'); } catch (e) { console.warn('[foxpaw] flow.js not loaded', e); } return self.FoxFlow || null; })();
@@ -2055,6 +2055,7 @@ function grantsOf(msg) {
   const trust = t && t.mode === 'all' ? { mode: 'all', sites: [] }
     : t && t.mode === 'sites' && Array.isArray(t.sites) ? { mode: 'sites', sites: t.sites.filter((x) => typeof x === 'string' && x).map((x) => x.toLowerCase()) } : null;
   return { windows: wins, trust: trust && (trust.mode === 'all' || trust.sites.length) ? trust : null,
+    siteGate: g.siteGate === true, // 1.34.2: relay ≥3.8.20 — untrusted = read-only (only then is the rule enforced here)
     creds: { generated: c.generated === true, otp: c.otp === true, testSites: Array.isArray(c.testSites) ? c.testSites.filter((x) => typeof x === 'string') : [] } };
 }
 // categories a 5-minute window may cover (mirrors the relay's WINDOW_VERBS); pay / grant /
@@ -2095,6 +2096,24 @@ function trustScope(ctx, host) {
   const once = ctx.task && (g.windows || []).find((w) => w.once === true && w.host === '*' && w.verb === '*' && (!w.until || w.until > now));
   if (once) return { id: once.id, basis: 'once', label: '本次' };
   return null;
+}
+// 1.34.2: where an agent may act at all. Standing trust only (the relay's live roster push wins over the stamped copy);
+// 全部网站 = everywhere, 指定网站 = those sites + a blank new tab, none = nowhere. Only when the relay stamped siteGate.
+const SITE_FREE_KINDS = ['taskResult', 'recordStop', 'cdpDetach'];
+function siteGateCheck(ctx, tab, target) {
+  if (!ctx || ctx.local || ctx.ownerReplay === true || !ctx.agentId || !(ctx.grants && ctx.grants.siteGate)) return;
+  if (SITE_FREE_KINDS.includes(ctx.kind)) return; // stopping your own recording / a legacy task result is not acting on a site
+  const live = agentLive.get(ctx.agentId);
+  const t = live && live.trustKnown ? live.trust : ctx.grants.trust;
+  if (t && t.mode === 'all') return;
+  const goes = target && target !== 'about:blank' ? target : (target === 'about:blank' ? '' : (tab && tab.url) || '');
+  const host = /^https?:/i.test(goes) ? hostOfUrl(goes) : '';
+  if (t && t.mode === 'sites' && (!host || hostInSites(host, t.sites))) return;
+  const e = err('UNTRUSTED_SITE', t && t.mode === 'sites'
+    ? `not trusted on ${host || 'this page'}: read-only here — "${ctx.kind}" was refused. Ask the owner to trust this site (console Agents → your details → Trust).`
+    : `the owner has not trusted you on any site yet: read-only — "${ctx.kind}" was refused. Ask the owner to trust the site you need (console Agents → your details → Trust).`);
+  e.site = host;
+  throw e;
 }
 function trustFor(ctx, cat, host, tab) {
   if (!TRUST_VERBS.includes(cat)) return null;
@@ -2568,6 +2587,9 @@ async function execCore(ctx, act) {
   }
   let target = null;
   if (act.targetUrl !== undefined) target = urlCheck(act.targetUrl, c);
+  // 4b 1.34.2 (relay 3.8.20, 老猫 11-06): 可操作 but not trusted for this site = read-only here. Judged on the tab's REAL
+  // address now (every flow step too) — or, for navigate / new tab, where it goes. Owner commands / owner replays exempt.
+  if (act.cls !== 'read' && act.cls !== 'always') siteGateCheck(ctx, tab, target);
   // 5 classify
   let cat = 'normal', meta = null;
   if (act.classify) {
@@ -6687,7 +6709,21 @@ function panelAsk(obj, ms = 5000) {
 // execCore judges with it — a console / panel change applies to the very next step, even inside a running
 // flow whose envelope was stamped earlier. No entry (older relay) = the command's own agentCap.
 const agentLive = new Map(); // agentId -> {access, accessNow}
-function agentLiveSet(id, v) { if (id && v && ACCESS.includes(v.accessNow)) agentLive.set(id, { access: v.access, accessNow: v.accessNow }); }
+function agentLiveSet(id, v) {
+  if (!(id && v && ACCESS.includes(v.accessNow))) return;
+  const x = { access: v.access, accessNow: v.accessNow };
+  // 1.34.2: the roster also carries trust (relay ≥3.5) — a console / panel change applies to the next step of a running flow
+  if (Object.prototype.hasOwnProperty.call(v, 'trust')) {
+    const t = v.trust && typeof v.trust === 'object' ? v.trust : null;
+    x.trustKnown = true;
+    x.trust = t && t.mode === 'all' ? { mode: 'all', sites: [] }
+      : t && t.mode === 'sites' && Array.isArray(t.sites) && t.sites.length ? { mode: 'sites', sites: t.sites.filter((s) => typeof s === 'string').map((s) => s.toLowerCase()) } : null;
+  } else {
+    const old = agentLive.get(id);
+    if (old && old.trustKnown) { x.trustKnown = true; x.trust = old.trust; }
+  }
+  agentLive.set(id, x);
+}
 function agentLiveFromRoster(roster) {
   if (!Array.isArray(roster)) return;
   agentLive.clear();
