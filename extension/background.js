@@ -11,7 +11,7 @@ if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
 }
 
 const GROUP_TITLE = 'FoxPaw';
-const VERSION = '1.34.2';
+const VERSION = '1.34.4';
 // 1.17 录制版: the flow format / conversion / Playwright export
 // live in flow.js (pure, shared with Node tests and tools)
 const FF = (() => { try { if (typeof importScripts === 'function' && !self.FoxFlow) importScripts('flow.js'); } catch (e) { console.warn('[foxpaw] flow.js not loaded', e); } return self.FoxFlow || null; })();
@@ -204,8 +204,21 @@ async function acctActivateNow(id) {
     try { live = (await chrome.tabGroups.query({})) || []; } catch { live = []; }
     const label = await deviceLabelNow();
     let back = 0;
+    let tabsAll = null;
     for (const g of mine.groups || []) {
-      const hit = live.find((x) => x.id === g.id && x.title === g.title) || live.filter((x) => x.title === g.title).length === 1 && live.find((x) => x.title === g.title);
+      let hit = live.find((x) => x.id === g.id && x.title === g.title);
+      if (!hit) {
+        // 1.34.4: the stash restore had the same "exactly one match"
+        // pathology as loadGroups — duplicate same-titled copies (restart
+        // restores) made it skip the group entirely. Pick deterministically
+        // instead: most tabs, then lowest id.
+        const cands = live.filter((x) => x.title === g.title);
+        if (cands.length) {
+          if (!tabsAll) { try { tabsAll = (await chrome.tabs.query({})) || []; } catch { tabsAll = []; } }
+          const cnt = (gid) => tabsAll.filter((t) => t.groupId === gid).length;
+          hit = cands.slice().sort((a, b) => cnt(b.id) - cnt(a.id) || a.id - b.id)[0];
+        }
+      }
       if (!hit) continue;
       ownGroups.add(hit.id); back++;
       try { await chrome.tabGroups.update(hit.id, { title: groupTitle(label), color: 'orange' }); } catch { /* gone */ }
@@ -334,11 +347,28 @@ function bumpEpoch(tabId) { epochs.set(tabId, (epochs.get(tabId) || 0) + 1); }
    device label (「FoxPaw · 家里-Mac」). A same-titled group that is not on
    record is never authorized — the panel shows one line about it.
    Group ids do not survive a browser restart: on boot a record that no
-   longer exists is dropped and the group titled exactly with THIS
-   device's label (unique in its window) is re-claimed. Upgrading from
-   ≤1.15 claims the single 「FoxPaw」 group of the current window once. */
+   longer exists is dropped and the groups titled exactly with THIS
+   device's label are re-claimed. Upgrading from ≤1.15 claims the single
+   「FoxPaw」 group of the current window once.
+   1.34.4: claiming is DETERMINISTIC, no longer "exactly one per window".
+   Chrome also restores THIS browser's own saved-group copies, so after a
+   restart several same-titled groups can coexist in one window; the old
+   uniqueness rule then claimed none of them (authorized tabs dropped to
+   0, the panel mislabelled our own group as a synced foreign one, and
+   every authorization created yet another group). Now ALL groups with
+   this device's exact title are claimed; a content fingerprint (the
+   sorted tab urls of each claimed group, kept in the foxpawGroups
+   record as `fps`) picks the primary group per window, same-window
+   duplicates are merged into it, and claiming is retried when groups
+   appear (tabGroups.onCreated / onUpdated) instead of being memoized
+   dead after one failed boot pass. A FoxPaw-titled group whose title is
+   NOT this device's is foreign; one with this device's title that is
+   somehow unclaimed is reported separately (unclaimedOwn), never as
+   "synced" — the API offers no provenance signal at all. */
 const GROUPS_KEY = 'foxpawGroups';
 const ownGroups = new Set();      // group ids this extension created / claimed
+const primaryGroups = new Map();  // 1.34.4: windowId -> primary (fingerprint-winning) own group id
+let groupsBusy = false;           // 1.34.4: a loadGroups() pass is in flight (reclaim must not re-enter)
 const adopted = new Map();        // popup-window tabId -> opener's group id (popups cannot join a group)
 // 1.24 adopted tabs also live in storage.local ({tabId, gid, url, at}) so an extension reload / overwrite
 // install (onInstalled reason=update) can restore them; storage.session alone is wiped by a reload. Restored only
@@ -355,9 +385,47 @@ function groupTitle(label) {
 async function deviceLabelNow() {
   try { const { foxpawUi = {} } = await chrome.storage.local.get('foxpawUi'); return foxpawUi.deviceLabel || ''; } catch { return ''; }
 }
+/* 1.34.4 content fingerprints: a claimed group's identity across a browser
+   restart is its content — the sorted set of its tabs' urls. The record
+   keeps one url set per claimed group (`fps`); after a restart the
+   candidate whose content overlaps a recorded set most is the primary. */
+function groupTabUrls(tabs) { return [...new Set((tabs || []).map((t) => t.url || t.pendingUrl || '').filter(Boolean))].sort(); }
+function tabsByGroupId(tabs) { const m = new Map(); for (const t of tabs || []) { if (t.groupId == null || t.groupId === -1) continue; if (!m.has(t.groupId)) m.set(t.groupId, []); m.get(t.groupId).push(t); } return m; }
+async function queryAllTabs() { try { return (await chrome.tabs.query({})) || []; } catch { return []; } }
+function fpOverlap(urls, recFps) { let best = 0; for (const set of recFps || []) { const s = new Set(Array.isArray(set) ? set : []); let n = 0; for (const u of urls) if (s.has(u)) n++; if (n > best) best = n; } return best; }
+/* deterministic primary among same-titled candidates of one window:
+   best fingerprint overlap, then most tabs, then lowest id. */
+function pickPrimary(cands, byGroup, recFps) {
+  return cands.slice().sort((a, b) => {
+    const ua = groupTabUrls(byGroup.get(a.id) || []), ub = groupTabUrls(byGroup.get(b.id) || []);
+    return fpOverlap(ub, recFps) - fpOverlap(ua, recFps) || (ub.length - ua.length) || (a.id - b.id);
+  })[0];
+}
+/* move every tab of the duplicate groups into the primary; a group whose
+   last tab leaves dissolves on its own (Chrome semantics). */
+async function mergeDupGroups(primary, dups, byGroup) {
+  let moved = 0;
+  for (const d of dups || []) {
+    const tids = (byGroup.get(d.id) || []).map((t) => t.id);
+    if (!tids.length) continue;
+    try { await chrome.tabs.group({ tabIds: tids, groupId: primary.id }); moved += tids.length; } catch { /* group may be gone */ }
+  }
+  return moved;
+}
 async function saveGroups(extra = {}) {
   const { [GROUPS_KEY]: prev = {} } = await chrome.storage.local.get(GROUPS_KEY);
-  await chrome.storage.local.set({ [GROUPS_KEY]: { ...(prev || {}), ...extra, ids: [...ownGroups] } });
+  const rec = { ...(prev || {}), ...extra, ids: [...ownGroups] };
+  if (!('fps' in extra)) {
+    // refresh the content fingerprints of the groups we currently own, so
+    // the next browser restart can tell the primary from a saved copy
+    try {
+      const byGroup = tabsByGroupId(await queryAllTabs());
+      const fps = [];
+      for (const gid of ownGroups) { const urls = groupTabUrls(byGroup.get(gid) || []); if (urls.length) fps.push(urls); }
+      if (fps.length) rec.fps = fps; else if (prev && prev.fps) rec.fps = prev.fps;
+    } catch { if (prev && prev.fps) rec.fps = prev.fps; }
+  }
+  await chrome.storage.local.set({ [GROUPS_KEY]: rec });
   publishGroupHint();
 }
 async function saveAdopted() {
@@ -387,6 +455,43 @@ async function restoreAdopted(why) {
   if (n) { try { sendTabsSync(); } catch { /* not connected */ } }
   return n;
 }
+/* 1.34.4 deterministic claim: EVERY group carrying this device's exact
+   title is ours — claim them all (the pre-1.34.4 "exactly one per window"
+   rule claimed none whenever Chrome had restored a saved copy next to the
+   session-restored original). Per window a primary is picked by content
+   fingerprint and same-window duplicates are merged into it; cross-window
+   duplicates are claimed but never merged (a group cannot span windows).
+   Returns { changed, groups } with the group list refreshed after merges
+   (a group whose tabs all moved out no longer exists). */
+async function claimTitledGroups(groups, label, rec) {
+  const want = groupTitle(label);
+  const byWin = new Map();
+  for (const g of groups) if (g.title === want) byWin.set(g.windowId, [...(byWin.get(g.windowId) || []), g]);
+  if (!byWin.size) return { changed: false, groups };
+  const byGroup = tabsByGroupId(await queryAllTabs());
+  const recFps = rec && Array.isArray(rec.fps) ? rec.fps : [];
+  let changed = false, mergedGroups = 0, movedTabs = 0;
+  for (const [wid, cands] of byWin) {
+    const primary = pickPrimary(cands, byGroup, recFps);
+    primaryGroups.set(wid, primary.id);
+    for (const g of cands) if (!ownGroups.has(g.id)) { ownGroups.add(g.id); changed = true; }
+    if (cands.length > 1) {
+      const moved = await mergeDupGroups(primary, cands.filter((g) => g.id !== primary.id), byGroup);
+      if (moved) { mergedGroups += cands.length - 1; movedTabs += moved; changed = true; }
+    }
+  }
+  if (mergedGroups) {
+    audit(`merge duplicate groups: ${mergedGroups} same-titled copy(ies) of 「${want}」 merged into the primary group, ${movedTabs} tab(s) moved`);
+    let after = [];
+    try { after = (await chrome.tabGroups.query({})) || []; } catch { after = groups; }
+    if (!Array.isArray(after)) after = groups;
+    const liveAfter = new Set(after.map((g) => g.id));
+    for (const id of [...ownGroups]) if (!liveAfter.has(id)) { ownGroups.delete(id); changed = true; }
+    for (const [wid, gid] of [...primaryGroups]) if (!liveAfter.has(gid)) primaryGroups.delete(wid);
+    return { changed, groups: after };
+  }
+  return { changed, groups };
+}
 async function loadGroups() {
   const st = await chrome.storage.local.get(GROUPS_KEY);
   const rec = st[GROUPS_KEY] || {};
@@ -408,11 +513,10 @@ async function loadGroups() {
   // records that no longer exist (browser restart) -> drop, then re-claim by exact device title
   for (const id of [...ownGroups]) if (!live.has(id)) { ownGroups.delete(id); changed = true; }
   const label = await deviceLabelNow();
-  if (label && !ownGroups.size) {
-    const want = groupTitle(label);
-    const byWin = new Map();
-    for (const g of groups) if (g.title === want) byWin.set(g.windowId, [...(byWin.get(g.windowId) || []), g]);
-    for (const list of byWin.values()) if (list.length === 1) { ownGroups.add(list[0].id); changed = true; }
+  if (label) {
+    const r = await claimTitledGroups(groups, label, rec);
+    if (r.changed) changed = true;
+    groups = r.groups;
   }
   // one-time upgrade from ≤1.15: the single legacy 「FoxPaw」 group of the current window
   if (!rec.migrated) {
@@ -431,16 +535,41 @@ async function loadGroups() {
   if (changed) await saveGroups({ migrated: true });
   else publishGroupHint();
 }
-function groupsReady() { if (!groupsLoaded) groupsLoaded = loadGroups().catch(() => {}); return groupsLoaded; }
+function groupsReady() {
+  if (!groupsLoaded) {
+    groupsBusy = true;
+    groupsLoaded = loadGroups().catch(() => {}).then(() => { groupsBusy = false; });
+  }
+  return groupsLoaded;
+}
+/* 1.34.4: an empty claim is not memoized dead. Chrome may restore saved
+   groups only after the boot pass already ran (and found nothing); the
+   tabGroups listeners below call this so a group that appears later is
+   claimed in the same worker lifetime, no service-worker restart needed. */
+async function reclaimGroups() {
+  if (groupsBusy) return groupsReady();
+  groupsLoaded = null;
+  await groupsReady();
+  return [...ownGroups];
+}
 function isOwnGroup(gid) { return gid !== undefined && gid !== null && gid !== -1 && ownGroups.has(gid); }
 function tabAuthorized(tab) { return !!tab && (isOwnGroup(tab.groupId) || adopted.has(tab.id)); }
-// the panel's one-line hint: same-titled groups that are not ours (Chrome sync)
+// the panel's group hints (1.34.4): FoxPaw-titled groups that are not ours
+// split into foreign — title is not this device's (another device's group:
+// never authorized, never claimed) — and unclaimedOwn — this device's exact
+// title but not claimed (a restart-restore the claim pass has not picked up
+// yet; the panel offers a one-click claim). The tabGroups API gives NO
+// provenance signal, so the copy must not guess "synced from another
+// device" — the pre-1.34.4 hint did exactly that and misled users whose
+// own restored group was the one being flagged.
 async function publishGroupHint() {
   try {
     let groups = (await chrome.tabGroups.query({})) || [];
     if (!Array.isArray(groups)) groups = [];
-    const foreign = groups.filter((g) => String(g.title || '').startsWith(GROUP_TITLE) && !ownGroups.has(g.id)).length;
-    await setUi({ ownGroups: [...ownGroups], foreignGroups: foreign });
+    const ownTitle = groupTitle(await deviceLabelNow());
+    const foreign = groups.filter((g) => String(g.title || '').startsWith(GROUP_TITLE) && g.title !== ownTitle && !ownGroups.has(g.id)).length;
+    const unclaimedOwn = groups.filter((g) => g.title === ownTitle && !ownGroups.has(g.id)).length;
+    await setUi({ ownGroups: [...ownGroups], foreignGroups: foreign, unclaimedOwn });
   } catch { /* noop */ }
 }
 // our group in this window (create on demand, recorded); returns its id
@@ -448,8 +577,32 @@ async function ownGroupInWindow(windowId, create, seedTabId) {
   let groups = [];
   try { groups = (await chrome.tabGroups.query(windowId != null ? { windowId } : {})) || []; } catch { groups = []; }
   if (!Array.isArray(groups)) groups = [];
-  const mine = groups.find((g) => ownGroups.has(g.id) && (windowId == null || g.windowId == null || g.windowId === windowId));
+  const inWin = (g) => windowId == null || g.windowId == null || g.windowId === windowId;
+  const prim = windowId != null ? primaryGroups.get(windowId) : null;
+  const mine = (prim != null && groups.find((g) => g.id === prim && ownGroups.has(g.id) && inWin(g))) || groups.find((g) => ownGroups.has(g.id) && inWin(g));
   if (mine) return mine.id;
+  // 1.34.4: claim before create — a group carrying this device's exact
+  // title in this window is ours; claim it (merging same-window duplicates
+  // into the fingerprint primary) instead of minting the N+1th same-titled
+  // group. This is what stops the restart-duplicate proliferation at the
+  // authorization entry points (panel ＋当前页 / agent groupTab).
+  const label0 = await deviceLabelNow();
+  if (label0) {
+    const cands = groups.filter((g) => g.title === groupTitle(label0) && inWin(g));
+    if (cands.length) {
+      const rec = (await chrome.storage.local.get(GROUPS_KEY))[GROUPS_KEY] || {};
+      const byGroup = tabsByGroupId(await queryAllTabs());
+      const primary = pickPrimary(cands, byGroup, Array.isArray(rec.fps) ? rec.fps : []);
+      for (const g of cands) ownGroups.add(g.id);
+      primaryGroups.set(primary.windowId != null ? primary.windowId : windowId, primary.id);
+      if (cands.length > 1) {
+        const moved = await mergeDupGroups(primary, cands.filter((g) => g.id !== primary.id), byGroup);
+        if (moved) audit(`merge duplicate groups: same-titled copies of 「${groupTitle(label0)}」 merged into the primary group on claim, ${moved} tab(s) moved`);
+      }
+      await saveGroups();
+      return primary.id;
+    }
+  }
   if (!create) return -1;
   const gid = await chrome.tabs.group({ tabIds: [seedTabId] });
   await chrome.tabGroups.update(gid, { title: groupTitle(await deviceLabelNow()), color: 'orange' });
@@ -460,8 +613,9 @@ async function ownGroupInWindow(windowId, create, seedTabId) {
 async function retitleOwnGroups(label) {
   for (const id of ownGroups) { try { await chrome.tabGroups.update(id, { title: groupTitle(label) }); } catch { /* gone */ } }
 }
-chrome.tabGroups.onRemoved.addListener((g) => { if (g && ownGroups.delete(g.id)) saveGroups(); else publishGroupHint(); });
-chrome.tabGroups.onCreated.addListener(() => publishGroupHint());
+chrome.tabGroups.onRemoved.addListener((g) => { if (g && ownGroups.delete(g.id)) { for (const [w, gid] of [...primaryGroups]) if (gid === g.id) primaryGroups.delete(w); saveGroups(); } else publishGroupHint(); });
+chrome.tabGroups.onCreated.addListener(() => { publishGroupHint(); if (!ownGroups.size) reclaimGroups(); });
+chrome.tabGroups.onUpdated.addListener(() => { if (!ownGroups.size) reclaimGroups(); else publishGroupHint(); });
 async function getTab(tabId) {
   try { return await chrome.tabs.get(tabId); } catch { throw err('TAB_GONE', 'tab no longer exists'); }
 }
@@ -1520,6 +1674,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const gid = await groupTab(tab.id);
       await audit(`tab assigned to FoxPaw group: ${tab.title || tab.url}`);
       sendResponse({ ok: true, groupId: gid });
+    } else if (msg.type === 'foxpaw.claimGroups') {
+      // 1.34.4: the panel's 「认领这个组」 — run a fresh deterministic claim
+      // pass for this device's unclaimed same-titled groups (restart
+      // restores) instead of leaving the owner to delete copies by hand.
+      const own = await reclaimGroups();
+      await publishGroupHint();
+      await audit(`panel claim: ${own.length} FoxPaw group(s) claimed for this device`);
+      sendResponse({ ok: true, ownGroups: own });
     } else if (msg.type === 'foxpaw.setAccess') {
       // 1.27: only 全部暂停 ('off') / 恢复 ('write') — an old 只看 request means no browser-level limit
       if (!ACCESS.includes(msg.access)) throw new Error('bad access');
@@ -3362,6 +3524,21 @@ function fpPage(op, a) {
                pointer-events:none) and on no other control.
      Anything else stays OBSCURED. */
   const CTRL_SEL = 'a[href],button,input,select,textarea,summary,[role="button"],[role="link"],[role="menuitem"],[role="option"],[role="tab"],[role="checkbox"],[role="radio"],[role="switch"],[data-foxpaw-click]';
+  // 1.34.3: layer classification for the retarget check (the snapshot op's layerOf is
+  // block-scoped to that op; this is the same rule, shared by point / retarget)
+  const layerTagOf = (e) => {
+    for (let p = e, i = 0; p && p !== doc.body && p !== doc.documentElement && i < 40; p = p.parentElement || (p.getRootNode && p.getRootNode().host), i++) {
+      const r = attr(p, 'role');
+      if (/^(dialog|alertdialog|menu|listbox)$/.test(r) || attr(p, 'aria-modal') === 'true') return r || 'dialog';
+      if (p.hasAttribute && (p.hasAttribute('data-radix-popper-content-wrapper') || p.hasAttribute('data-radix-portal'))) return 'popover';
+      const cl = typeof p.className === 'string' ? p.className : '';
+      if (/(^|[\s_-])(modal|drawer|dropdown|popover|popup|popconfirm|picker-dropdown|select-dropdown|trigger-popup|tooltip)([\s_-]|$)/i.test(cl)) {
+        const st = getComputedStyle(p);
+        if (st.position === 'fixed' || st.position === 'absolute' || /modal|drawer/i.test(cl)) return /modal|drawer/i.test(cl) ? 'dialog' : 'popover';
+      }
+    }
+    return '';
+  };
   const retargetOf = (el, hit) => {
     if (!hit || hit === doc.body || hit === doc.documentElement) return '';
     const ctl = hit.closest ? hit.closest(CTRL_SEL) : null;
@@ -3370,7 +3547,18 @@ function fpPage(op, a) {
     if (ctl && ctl !== el && ctl !== target && !ctl.contains(el)) {
       const lab = ctl.tagName === 'LABEL' ? ctl : null;
       if (lab && lab.control === target) return 'card';
-      if (roleOf(ctl) === roleOf(el) && norm(clsName(ctl) || accName(ctl)) && norm(clsName(ctl) || accName(ctl)) === norm(clsName(el) || accName(el))) return 'same';
+      if (roleOf(ctl) === roleOf(el) && norm(clsName(ctl) || accName(ctl)) && norm(clsName(ctl) || accName(ctl)) === norm(clsName(el) || accName(el))) {
+        // 1.34.3 (batch 2-② / 4-②): layer consistency — when the TARGET lives inside a
+        // layer (dialog / popover), a same-named control from OUTSIDE that layer (the page's
+        // own twin 删除 under a popconfirm) may not absorb the click: it stays OBSCURED and
+        // the receipt names the covering element (hit). The classic case still passes: the
+        // modal's real 确定 (in the layer) over the page's stale copy (outside it).
+        // Same-layer page twins stay ambiguous by name alone — geometry cannot separate
+        // them without breaking the modal case (§38.3); `hit` in the receipt is the check.
+        const lt = layerTagOf(el), lc = layerTagOf(ctl);
+        if (!lt || lc) return 'same'; // target not layered (classic case), or the stand-in is itself in a layer
+        return '';                    // target layered + stand-in is a page-level twin: not the same control
+      }
       return '';
     }
     if (isToggle) {
@@ -3416,6 +3604,16 @@ function fpPage(op, a) {
   };
 
   /* ================= ops ================= */
+  if (op === 'layerSig') {
+    // 1.34.3 geometry signature of the open layers (popups / dialogs / menus / drawers):
+    // the background polls it before a snapshot so a still-mounting / still-animating layer
+    // is captured whole instead of mid-flight (batch 4-①: Arco popconfirm buttons missing)
+    let s2 = 0;
+    for (const e of deepAll('[role="dialog"],[role="menu"],[role="listbox"],[class*="popup"],[class*="popconfirm"],[class*="dropdown"],[class*="drawer"]')) {
+      const r = e.getBoundingClientRect(); s2 += (r.width | 0) * 131 + (r.height | 0) * 17 + (r.top | 0) * 7 + (r.left | 0);
+    }
+    return s2;
+  }
   if (op === 'snapshot') {
     // 1.32 other extensions' floating widgets (a shadow root reset with :host{all:initial} or one that loads
     // chrome-extension:// files; a light-DOM box that does) are not the page — neither their text nor their buttons
@@ -3480,7 +3678,7 @@ function fpPage(op, a) {
         if (/^(dialog|alertdialog|menu|listbox)$/.test(r) || attr(p, 'aria-modal') === 'true') return r || 'dialog';
         if (p.hasAttribute && (p.hasAttribute('data-radix-popper-content-wrapper') || p.hasAttribute('data-radix-portal'))) return 'popover';
         const cl = typeof p.className === 'string' ? p.className : '';
-        if (/(^|[\s_-])(modal|drawer|dropdown|popover|popup|picker-dropdown|select-dropdown|trigger-popup)([\s_-]|$)/i.test(cl)) {
+        if (/(^|[\s_-])(modal|drawer|dropdown|popover|popup|popconfirm|picker-dropdown|select-dropdown|trigger-popup|tooltip)([\s_-]|$)/i.test(cl)) {
           const st = getComputedStyle(p);
           if (st.position === 'fixed' || st.position === 'absolute' || /modal|drawer/i.test(cl)) return /modal|drawer/i.test(cl) ? 'dialog' : 'popover';
         }
@@ -3490,6 +3688,16 @@ function fpPage(op, a) {
     const layered = els.map((e) => ({ e, layer: layerOf(e) }));
     els = [...layered.filter((x) => x.layer), ...layered.filter((x) => !x.layer)].map((x) => x.e);
     const layerMap = new Map(layered.map((x) => [x.e, x.layer]));
+    // 1.34.3 (batch 2-①): only when the capture overflows the cap — elements inside a big
+    // nav / menu container (>40 interactive descendants) go after the content area, so a
+    // console's giant side menu cannot eat the whole 200 budget and cut the content
+    // buttons. Layered elements keep their priority; under the cap nothing is reordered.
+    if (els.length > max) {
+      const menuish = (e) => { for (let q = e.parentElement, i = 0; q && q !== doc.body && i < 12; q = q.parentElement, i++) { const cl = typeof q.className === 'string' ? q.className : ''; if (q.tagName === 'NAV' || q.tagName === 'ASIDE' || /(^|[\s_-])(menu|nav|navbar|sider|sidebar)([\s_-]|$)/i.test(cl)) { try { return q.querySelectorAll(INTERACTIVE_SEL).length > 40; } catch { return false; } } } return false; };
+      const head = els.filter((e) => layerMap.get(e));
+      const rest = els.filter((e) => !layerMap.get(e));
+      els = [...head, ...rest.filter((e) => !menuish(e)), ...rest.filter((e) => menuish(e))];
+    }
     const off = Math.max(0, Number(a.offset) || 0);
     const elements = els.slice(off, off + max).map((el) => {
       const o = describe(el, false);
@@ -3616,7 +3824,7 @@ function fpPage(op, a) {
     const hit = deepFromPoint(x, y);
     const ok = hitsTarget(el, hit);
     const rt = ok ? '' : retargetOf(el, hit);
-    return { rect: rectOf(el), x, y, hitOk: ok, retarget: rt || undefined, obscuredBy: ok ? '' : describeHit(hit), enabled: enabled(el), scrolled, name: (clsName(el) || accName(el)).slice(0, 80), hidden: doc.visibilityState === 'hidden' };
+    return { rect: rectOf(el), x, y, hitOk: ok, retarget: rt || undefined, obscuredBy: ok ? '' : describeHit(hit), hit: hit ? { ref: refOf(hit), name: (accName(hit) || tx(hit.innerText !== undefined ? hit.innerText : hit.textContent || '')).slice(0, 40) } : undefined, enabled: enabled(el), scrolled, name: (clsName(el) || accName(el)).slice(0, 80), hidden: doc.visibilityState === 'hidden' }; // 1.34.3: hit = what is ACTUALLY at the point (temp ref + name), so an OBSCURED verdict names a clickable element, not a prose description
   }
   if (op === 'clickDom') {
     const el = byRef(a.ref);
@@ -3805,7 +4013,15 @@ function fpPage(op, a) {
       return { need: 'richtext', kind };
     }
     if (kind === 'contenteditable') {
+      // 1.34.3 (batch 4-⑤): confirm the focus is really THIS editor's before writing — the
+      // first synthetic focus on portal editors is routinely swallowed and the text went
+      // nowhere (or into another box) without a word. Same rule as the focusCheck op: the
+      // deep active element is the editor, inside it, or contains it.
+      const deepActive = () => { let f = doc.activeElement, g = 0; while (f && f.shadowRoot && f.shadowRoot.activeElement && g++ < 8) f = f.shadowRoot.activeElement; return f; };
+      const ownsFocus = () => { const f = deepActive(); return !!f && (f === el || el.contains(f) || (f.closest && el.isContentEditable && f.closest('[contenteditable]') === el)); }; // exactly the focusCheck op's rule
       focusEl(el);
+      if (!ownsFocus()) focusEl(el);
+      if (!ownsFocus()) return { ok: false, kind, code: 'FOCUS_LOST', actual: '', error: 'focus did not land in this editor (active element: ' + ((deepActive() || {}).tagName || 'none') + ') — nothing was written' };
       const sel = W.getSelection && W.getSelection();
       if (sel && doc.createRange) { const rg = doc.createRange(); rg.selectNodeContents(el); sel.removeAllRanges(); sel.addRange(rg); }
       let done = false;
@@ -4106,7 +4322,7 @@ function joinRef(frameId, local) { return frameId ? `f${frameId}${local}` : loca
 // longer hang its command until the relay gives up (EXT_TIMEOUT). Read-only ops inject at once
 // (injectImmediately: no wait for document_idle) one frame at a time: a slow sub-frame is skipped and
 // named (framesSkipped); a main frame that does not answer = TAB_FROZEN / PAGE_SLOW with what to do.
-const READ_OPS = new Set(['snapshot', 'resolve', 'probe', 'iframes', 'frameSize', 'loginFields', 'read', 'extract', 'query', 'pageState', 'rect', 'settle']);
+const READ_OPS = new Set(['snapshot', 'resolve', 'probe', 'iframes', 'frameSize', 'loginFields', 'read', 'extract', 'query', 'pageState', 'rect', 'settle', 'layerSig']); // 1.34.3: layerSig = pre-snapshot layer-stability probe
 const FRAME_MAIN_MS = 10000;   // main frame (and single-frame calls)
 const FRAME_SUB_MS = 4000;     // each sub-frame of an all-frames read
 const SNAP_TEXT_LIMIT = 20000;    // 1.32 one snapshot carries ≤ 20000 chars of text; textOffset pages the rest
@@ -4226,6 +4442,16 @@ async function cdpFrameRows(tabId, rows, op, arg) {
   return { rows: out, still: [...skipped.filter((s) => s.why !== 'unreachable'), ...left] };
 }
 // all frames for a read op, with the CDP fallback; rows carry frameId (+ via:'cdp')
+/* 1.34.3 (batch 4-①): before a snapshot, give a just-opened layer a moment to finish
+   mounting / animating — its buttons used to be missing from the capture entirely.
+   A page with no layers pays one 60 ms grace poll and goes straight through. */
+async function layerSettle(tabId) {
+  const sig = async () => { const r = await inFrame(tabId, 0, 'layerSig', {}).catch(() => null); return typeof r === 'number' ? r : 0; };
+  let prev = await sig();
+  if (!prev) { await sleep(60); prev = await sig(); if (!prev) return; }
+  for (let i = 0; i < 5; i++) { await sleep(50); const s2 = await sig(); if (s2 === prev) return; prev = s2; }
+}
+
 async function readFrames(tabId, op, arg, mainOnly) {
   if (mainOnly) return inFrames(tabId, op, arg, [0]);
   const rows = await inFrames(tabId, op, arg);
@@ -4589,7 +4815,7 @@ async function cdpMouseClick(tabId, x, y) {
 async function realClick(tabId, cand, o = {}) {
   const t0 = Date.now();
   const timeout = o.timeout === undefined ? AUTO_WAIT_MS : o.timeout;
-  let prev = null, obscuredSince = 0, lastObs = '';
+  let prev = null, obscuredSince = 0, lastObs = '', lastHit = null;
   for (let i = 0; ; i++) {
     const p = await inFrame(tabId, cand.frameId, 'point', { ref: cand.local, arm: true });
     if (!p || p.gone) throw err('STALE_REF', 'element detached before the click — re-snapshot');
@@ -4598,10 +4824,10 @@ async function realClick(tabId, cand, o = {}) {
     if (!stable) { prev = p; if (Date.now() - t0 > timeout) throw err('NOT_STABLE', 'element kept moving for ' + timeout + ' ms'); if (i) await sleep(16); continue; }
     if (!p.hitOk && !p.retarget) {
       if (!obscuredSince) obscuredSince = Date.now();
-      lastObs = p.obscuredBy;
+      lastObs = p.obscuredBy; lastHit = p.hit || null;
       if (Date.now() - obscuredSince >= Math.min(OBSCURED_MS, timeout) || Date.now() - t0 > timeout) {
         const e = err('OBSCURED', `the element is covered by 「${lastObs || '另一个元素'}」 — close it first (or click that)`);
-        e.detail = { point: [Math.round(p.x), Math.round(p.y)], rect: p.rect, coveredBy: lastObs };
+        e.detail = { point: [Math.round(p.x), Math.round(p.y)], rect: p.rect, coveredBy: lastObs, hit: lastHit || undefined }; // 1.34.3: the covering element's own ref — the agent can click IT (or close it) instead of guessing
         throw e;
       }
       await sleep(80); prev = null; continue;
@@ -4627,12 +4853,12 @@ async function realClick(tabId, cand, o = {}) {
       const r = await inFrame(tabId, cand.frameId, 'clickDom', { ref: cand.local });
       if (!r || !r.ok) throw err('CLICK_FAILED', (r && r.error) || 'click failed');
     }
-    return { via, name: p.name, retargeted: p.hitOk ? undefined : p.retarget, point: [Math.round(off ? off.x + p.x : p.x), Math.round(off ? off.y + p.y : p.y)] };
+    return { via, name: p.name, retargeted: p.hitOk ? undefined : p.retarget, hit: p.hit || undefined, point: [Math.round(off ? off.x + p.x : p.x), Math.round(off ? off.y + p.y : p.y)] };
   }
 }
 
 /* ---- click effect: poll the armed observer for a short window ---- */
-const NO_EFFECT_MS = 450;
+const NO_EFFECT_MS = 900; // 1.34.3: 450 ms was too short for slow component pages (batch 4-④) — a late effect read as noEffect; a command may widen it with noEffectMs (200–3000)
 async function clickEffect(tabId, cand, ms) {
   let last = null;
   for (const t0 = Date.now(); ;) {
@@ -4835,6 +5061,20 @@ function pageModel(ref) {
     for (let c = el.__vueParentComponent, i = 0; c && i < 6; c = c.parent, i++) {
       if (c.props && c.props.modelValue !== undefined) { out.model = c.props.modelValue; out.from = (c.type && (c.type.name || c.type.__name)) || 'component'; break; }
     }
+    // 1.34.3 Arco Design: no modelValue on the control — the Form holds props.model and
+    // the FormItem in between holds props.field; the field's model value is model[field]
+    if (!has(out, 'model')) for (let c = el.__vueParentComponent, i = 0; c && i < 12; c = c.parent, i++) {
+      if (!(c.props && typeof c.props.field === 'string' && c.props.field)) continue;
+      for (let f = c.parent, j = 0; f && j < 12; f = f.parent, j++) {
+        const fm = f.props && f.props.model;
+        if (fm && typeof fm === 'object') {
+          let mv = fm; for (const k of c.props.field.split('.')) mv = mv == null ? undefined : mv[k];
+          if (mv !== undefined) { out.model = mv; out.from = 'Arco Form field ' + c.props.field; }
+          break;
+        }
+      }
+      if (has(out, 'model')) break;
+    }
   } else {
     for (let n = el, i = 0; n && i < 6; n = n.parentElement, i++) {
       if (n.__vue__) { out.fw = 'vue2'; const vm = n.__vue__; if (vm.$props && has(vm.$props, 'value')) { out.model = vm.$props.value; out.from = (vm.$options && vm.$options.name) || 'component'; } break; }
@@ -4853,7 +5093,7 @@ async function modelRead(tabId, cand) {
     return rows && rows[0] ? rows[0].result : null;
   } catch { return null; }
 }
-const MODEL_KINDS = /^(text|textarea|email|number|date|)$/;
+const MODEL_KINDS = /^(text|textarea|email|number|date|contenteditable|)$/; // 1.34.3: contenteditable joins model verification (batch 4-③)
 function modelMatches(m, want, kind) {
   if (m.modelType === 'object' || m.modelType === 'function') return null; // not comparable (dayjs / moment…)
   const v = m.model;
@@ -5023,7 +5263,7 @@ async function fillCode(tabId, cand, r, value) {
 const READBACK_KINDS = /^(text|textarea|email|number|date|datepicker|contenteditable|code|search|url|tel|)$/;
 async function fillOne(tabId, cand, m, dryRun) {
   const r = await fillOneChecked(tabId, cand, m, dryRun);
-  if (dryRun || !r || r.ok || !m || typeof m !== 'object' || CRED_OK.has(m) || Array.isArray(m.value) || typeof m.value === 'boolean') return r;
+  if (dryRun || !r || r.ok || r.code === 'FOCUS_LOST' || !m || typeof m !== 'object' || CRED_OK.has(m) || Array.isArray(m.value) || typeof m.value === 'boolean') return r; // 1.34.3: FOCUS_LOST keeps its code (a length verdict on unwritten text would mislead)
   if (!READBACK_KINDS.test(r.kind || '') || typeof r.actual !== 'string' || r.actual === '•••') return r;
   const want = codeNorm(m.value);
   const n = r.actualLen !== undefined ? r.actualLen : (r.kind === 'code' ? null : codeNorm(r.actual).length);
@@ -5032,7 +5272,13 @@ async function fillOne(tabId, cand, m, dryRun) {
 }
 async function fillOneChecked(tabId, cand, m, dryRun) {
   lastClickField.delete(tabId);
-  const r = await fillOneRaw(tabId, cand, m, dryRun);
+  let r = await fillOneRaw(tabId, cand, m, dryRun);
+  // 1.34.3 (batch 4-⑤): a plain contenteditable whose first focus never landed gets ONE
+  // real click (focusForTyping) and ONE retry before FOCUS_LOST is final — portal editors
+  // routinely swallow the first synthetic focus and the text used to vanish silently
+  if (!dryRun && r && !r.ok && r.code === 'FOCUS_LOST') {
+    try { await focusForTyping(tabId, cand); const r2 = await fillOneRaw(tabId, cand, m, dryRun); if (r2) r = r2; } catch { /* keep the first FOCUS_LOST */ }
+  }
   if (dryRun || !r || !r.ok || !MODEL_KINDS.test(r.kind || '')) return r;
   if (m && typeof m === 'object' && CRED_OK.has(m)) return r; // 1.25: a credential (incl. a code) is never read back or re-typed
   const value = m.value;
@@ -5041,19 +5287,22 @@ async function fillOneChecked(tabId, cand, m, dryRun) {
   await sleep(40);
   const back = await inFrame(tabId, cand.frameId, 'read', { ref: cand.local }).catch(() => null);
   const domNow = back ? String(back.actual ?? '') : r.actual;
-  const domOk = r.kind === 'number' ? (Number(domNow) === Number(value) || domNow === String(value)) : (domNow === String(value) || numEq(domNow, value));
+  // 1.34.3: a contenteditable's read-back collapses paragraph newlines (innerText), so its
+  // DOM comparison is whitespace-insensitive — a strict compare read as "not taken" and the
+  // remedy typed the whole text a second time
+  const domOk = r.kind === 'number' ? (Number(domNow) === Number(value) || domNow === String(value)) : r.kind === 'contenteditable' ? (String(domNow).replace(/\s+/g, '') === String(value).replace(/\s+/g, '')) : (domNow === String(value) || numEq(domNow, value));
   // (b) the framework's model
   let v = await verifyModel(tabId, cand, value, r.kind);
-  if (domOk && (!v.checked || v.ok)) return { ...r, actual: domNow, verified: v.checked ? 'model' : 'dom', model: v.checked ? v.m.model : undefined };
+  if (domOk && (!v.checked || v.ok)) return { ...r, actual: domNow, verified: v.checked ? 'model' : 'dom', modelChecked: !!v.checked, model: v.checked ? v.m.model : undefined }; // 1.34.3: modelChecked says plainly whether a framework model was probed at all — a bare 'dom' is not a verification
   // remedy: real typing (trusted input events) + commit (change / blur), then read both again
   let typed = false;
   try { await typeReal(tabId, cand, value); typed = true; } catch (e) { if (e && e.code === 'FOCUS_LOST') return { ok: false, kind: r.kind, actual: domNow, error: e.message }; typed = false; }
   const back2 = await inFrame(tabId, cand.frameId, 'read', { ref: cand.local }).catch(() => null);
   const dom2 = back2 ? String(back2.actual ?? '') : domNow;
-  const dom2Ok = r.kind === 'number' ? (Number(dom2) === Number(value) || dom2 === String(value)) : (dom2 === String(value) || numEq(dom2, value));
+  const dom2Ok = r.kind === 'number' ? (Number(dom2) === Number(value) || dom2 === String(value)) : r.kind === 'contenteditable' ? (String(dom2).replace(/\s+/g, '') === String(value).replace(/\s+/g, '')) : (dom2 === String(value) || numEq(dom2, value));
   v = await verifyModel(tabId, cand, value, r.kind);
-  if (dom2Ok && (!v.checked || v.ok)) return { ...r, actual: dom2, via: 'insertText', verified: v.checked ? 'model' : 'dom', model: v.checked ? v.m.model : undefined };
-  const out = { ok: false, kind: r.kind, actual: dom2, verified: v.checked ? 'model' : 'dom' };
+  if (dom2Ok && (!v.checked || v.ok)) return { ...r, actual: dom2, via: 'insertText', verified: v.checked ? 'model' : 'dom', modelChecked: !!v.checked, model: v.checked ? v.m.model : undefined };
+  const out = { ok: false, kind: r.kind, actual: dom2, verified: v.checked ? 'model' : 'dom', modelChecked: !!v.checked };
   if (v.checked) {
     out.model = v.m.model;
     out.error = `the page's data did not take the value: ${v.m.fw} ${v.m.from || ''} holds ${JSON.stringify(v.m.model)} but "${value}" was filled (the box shows "${dom2}")${typed ? ' — real typing did not help either' : ''}`;
@@ -5219,6 +5468,7 @@ function cdpScriptDetail(method, params) {
 const pressDecision = new Map(); // tabId -> ts of an allowed mousePressed (its release inherits it)
 // 1.29 the text box an agent's foxpaw_click last put the cursor in (cleared by a coordinate click, Tab, fill)
 const lastClickField = new Map(); // tabId -> {local, frameId, name, at}
+const clickIdem = new Map(); // 1.34.3 click idempotency: 'tabId|agent|idem' -> {at, result} (60 s window)
 const LAST_CLICK_FIELD_MS = 60000;
 async function elementInfo(tabId, sel) {
   try { return await execScript(tabId, pageElementInfo, [sel, SECRET_HINT.source]); } catch { return { found: false, unreachable: true }; }
@@ -5792,6 +6042,7 @@ const handlers = {
     } });
   },
 
+
   // 1.30 paging (offset / limit → total, nextOffset), sub-frames grouped with their url (cross-origin / OOPIF
   // through scripting, unreachable ones through CDP), autoScroll (scroll to the bottom first), frames:'main'.
   async snapshot(msg, ctx) {
@@ -5807,6 +6058,7 @@ const handlers = {
       const paged = msg.offset !== undefined || msg.limit !== undefined;
       const offset = Math.max(0, Math.floor(Number(msg.offset) || 0));
       const limit = Math.min(Math.max(1, Math.floor(Number(msg.limit) || Number(maxElements) || 200)), paged ? 1000 : 600);
+      await layerSettle(tabId); // 1.34.3: let a just-opened layer finish mounting / animating first
       const rows = await readFrames(tabId, 'snapshot', { max: Math.min(offset + limit, 6000) }, msg.frames === 'main');
       const topRow = rows.find((r) => r.frameId === 0) || rows[0] || {};
       const top = topRow.result || { title: tab.title, url: tab.url, text: '', forms: [], elements: [] };
@@ -6054,7 +6306,13 @@ const handlers = {
     const { tabId, epoch } = msg;
     const spec = specOf(msg);
     let cand = null, wait = AUTO_WAIT_MS, tClassify = Date.now(), start = null, advanced = null;
-    return execCore(ctx, {
+    // 1.34.3 (batch 4-④): request-level idempotency — a repeated `idem` key for the same
+    // tab + agent replays the first result instead of dispatching a second real click
+    // (a duplicated dispatch once doubled the 卡密 stock). Window 60 s, at most 200 keys;
+    // only completed results are cached — a failed click may be retried under the same key.
+    const idemKey = msg.idem ? tabId + '|' + (ctx.agentId || 'local') + '|' + String(msg.idem).slice(0, 80) : '';
+    if (idemKey) { const prev = clickIdem.get(idemKey); if (prev && Date.now() - prev.at < 60000) return { ...prev.result, duplicate: true }; }
+    const res = await execCore(ctx, {
       cls: 'write', scope: 'control',
       classify: async (tab) => {
         tClassify = Date.now();
@@ -6087,10 +6345,12 @@ const handlers = {
         await adoptionsSettled(tabId, 1000);
         const out = { ok: true, clicked: (r.name || cand.name || cand.tag || '').slice(0, 80), ref: cand.ref, via: r.via, category: classifyElement(cand.info), timing };
         if (r.retargeted) out.retargeted = r.retargeted;
+        if (r.hit) out.hit = r.hit; // 1.34.3: what was actually at the click point (ref + name)
+        const effMs = Math.min(3000, Math.max(200, Number(msg.noEffectMs) || NO_EFFECT_MS));
         // effect check: a click that changed nothing (no navigation, new tab, DOM change,
         // request, submit, state or focus change) is reported as noEffect — never a silent ok
         if (!msg.noWaitAfter && !nav && !openedSince(tabId, t0).length) {
-          const eff = await clickEffect(tabId, cand, NO_EFFECT_MS);
+          const eff = await clickEffect(tabId, cand, effMs);
           if (eff && eff.armed) {
             out.effect = eff.sig;
             if (!eff.sig.length && eff.radioOn) out.already = 'checked';
@@ -6103,7 +6363,7 @@ const handlers = {
                 if (fb && fb.invalid) out.invalid = fb.invalid;
                 if (fb && fb.ok) {
                   // a submit the page did not preventDefault means a real navigation is coming
-                  let eff2 = await clickEffect(tabId, cand, NO_EFFECT_MS);
+                  let eff2 = await clickEffect(tabId, cand, effMs);
                   const realSubmit = how === 'submit' && (!eff2 || !eff2.armed || eff2.submits > eff2.prevented);
                   nav = await settleNavigation(tabId, seq1, realSubmit ? NAV_START_LINK_MS : NAV_START_MS, LOAD_TIMEOUT_MS);
                   out.effect = nav ? ['navigation'] : (eff2 && eff2.sig) || [];
@@ -6134,11 +6394,14 @@ const handlers = {
           else { out.focused = false; out.focusLost = (f && f.focused) || 'another element'; out.hint = `the box did not take the cursor (focus is on ${out.focusLost}) — do not type with raw CDP now; use foxpaw_fill on this box`; lastClickField.set(tabId, { local: cand.local, frameId: cand.frameId || 0, name: cand.name || '', at: Date.now() }); }
         } else lastClickField.delete(tabId);
         // 1.29 a native <select> opens Chrome's own popup, which no page script or CDP mouse event can pick from
+        if (out.noEffect) out.effectWindowMs = effMs; // 1.34.3: the observation window behind a noEffect verdict, in the receipt
         if (cand.tag === 'SELECT') { out.hint = 'this is a native <select>: choose with foxpaw_fill {ref, value: "<option text or value>"} — clicking only opens the browser\'s own list'; delete out.noEffect; }
         return out;
       },
       audit: (o, cat) => `click tab=${tabId} ${o.ref || ''} cat=${cat} via=${o.via || '-'} -> ${o.clicked || ''}${o.navigated ? ' => ' + o.navigated : ''}${o.fallback ? ' fallback=' + o.fallback : ''}${o.noEffect ? ' NO-EFFECT' : ''}${o.pageAdvanced ? ' page-advanced' : ''}`,
     });
+    if (idemKey && res) { clickIdem.set(idemKey, { at: Date.now(), result: res }); while (clickIdem.size > 200) clickIdem.delete(clickIdem.keys().next().value); }
+    return res;
   },
 
   /* fill. Accepts the MCP contract {fields:[{ref|selector|label|role,name|text, value, kind?}]}
@@ -6200,6 +6463,7 @@ const handlers = {
           try { r = await fillOne(tabId, cand, m, dryRun); } catch (e) { r = { ok: false, error: (e.code ? e.code + ': ' : '') + String(e.message || e) + (e.detail ? ' ' + JSON.stringify(e.detail) : '') }; }
           const f = { ok: !!r.ok, actual: r.actual, kind: r.kind, ref: cand.ref, field: m.label || m.name || m.selector || m.ref || m.auto || cand.name };
           if (r.verified) f.verified = r.verified;           // 'model' (framework value read back) | 'dom'
+          if (r.modelChecked !== undefined) f.modelChecked = r.modelChecked; // 1.34.3: false = no framework model could be probed (a 'dom' success is NOT a model verification)
           if (r.model !== undefined) f.model = r.model;
           if (r.via) f.via = r.via;
           if (r.editor) f.editor = r.editor;           // 1.29.1 monaco / codemirror5 / codemirror6 / ace
@@ -7220,4 +7484,5 @@ chrome.runtime.onInstalled.addListener((d) => {
 const booted = boot();
 // test hook (harmless in production): lets the harness drive the controller
 self.__foxpaw = { retryDelay, panelAsk, ackTimeoutVerdict, inFrames, connStale, STALE_MS, userSteps, notifTabs, pageModel, fpPage, Conn, connStart, connSnapshot, accessGate, commandClass, booted, classifyElement, recRedactBundle, scrubCdpEvent, CDP_SENSITIVE, CDP_READ, CONFIRM_TTL_MS,
-  migratedPairing, MIGRATE_KEY, DOMAIN_NOTE_KEY, ownGroups, adopted, adoptMeta, restoreAdopted, ADOPT_KEY, groupTitle, capsOf, focusCache, focusGen, fpPage, FF, flowRuns, keyParams, recRedactUrl };
+  migratedPairing, MIGRATE_KEY, DOMAIN_NOTE_KEY, ownGroups, adopted, adoptMeta, restoreAdopted, ADOPT_KEY, groupTitle, capsOf, focusCache, focusGen, fpPage, FF, flowRuns, keyParams, recRedactUrl,
+  reclaimGroups, primaryGroups, acctActivate, acctDeactivate };

@@ -974,7 +974,12 @@ function renderAgent() {
   $('tabCount').textContent = mine.length;
   const nForeign = Number(D.ui.foreignGroups) || 0;
   const fh = $('foreignHint');
-  if (fh) { fh.classList.toggle('hidden', !nForeign); fh.textContent = nForeign ? `另有 ${nForeign} 个 FoxPaw 组不是这台浏览器建的（多半是 Chrome 同步过来的），里面的标签 Agent 碰不到。不想看到它可在 Chrome 设置 → 同步 里关掉「已保存的标签组」。` : ''; }
+  if (fh) { fh.classList.toggle('hidden', !nForeign); fh.textContent = nForeign ? `另有 ${nForeign} 个 FoxPaw 组不是这台设备的（标题对不上这台设备的名称），里面的标签 Agent 碰不到。` : ''; }
+  // 1.34.4: this device's own group restored by a restart but not claimed yet —
+  // offer the one-click claim instead of the old (wrong) "turn off sync" advice
+  const nUnclaimed = Number(D.ui.unclaimedOwn) || 0;
+  const uh = $('unclaimedHint');
+  if (uh) { uh.classList.toggle('hidden', !nUnclaimed); const ut = $('unclaimedText'); if (ut) ut.textContent = nUnclaimed ? `这台浏览器里有 ${nUnclaimed} 个本机的 FoxPaw 组还没认领（多半是重启后被 Chrome 恢复的），里面的标签 Agent 碰不到。点「认领这个组」即可恢复授权：` : ''; }
   const lockedTabs = new Set((Array.isArray(D.ui.humanLocks) ? D.ui.humanLocks : []).map((l) => l.tabId));
   if (changed('tabs', [mine.map((t) => [t.id, t.title, t.url]), users, waiting, Object.keys(touched), [...lockedTabs], ar && [ar.agentLabel, ar.paused, recTab, D.ui.recLock]])) {
     const box = $('tabList');
@@ -1623,6 +1628,12 @@ async function assignCurrent() {
 }
 $('btnAssign').onclick = assignCurrent;
 $('obAssign').onclick = assignCurrent;
+
+async function claimGroups() {
+  await send({ type: 'foxpaw.claimGroups' }).catch(() => null);
+  reload();
+}
+$('btnClaimGroups').onclick = claimGroups;
 
 // v1.17 (relay 3.0 ): management lives in the console — the panel only
 // opens it (no ticket: the owner's session comes from the device-approval
