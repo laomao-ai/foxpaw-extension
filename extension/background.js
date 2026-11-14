@@ -11,7 +11,7 @@ if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
 }
 
 const GROUP_TITLE = 'FoxPaw';
-const VERSION = '1.34.4';
+const VERSION = '1.34.5';
 // 1.17 录制版: the flow format / conversion / Playwright export
 // live in flow.js (pure, shared with Node tests and tools)
 const FF = (() => { try { if (typeof importScripts === 'function' && !self.FoxFlow) importScripts('flow.js'); } catch (e) { console.warn('[foxpaw] flow.js not loaded', e); } return self.FoxFlow || null; })();
@@ -1829,6 +1829,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // the silent open-check only asks a relay this browser is paired with (an unpaired panel stays quiet)
       if (msg.silent && !parsePairing((await cfg()).pairing)) return { ok: false, skipped: 'unpaired', current: VERSION };
       return checkUpdateNow(); // 1.24 「检查更新」 / 侧栏打开即静默检查 — reuses /health extLatest, no new relay API
+    } else if (msg.type === 'foxpaw.demoRun') {
+      // 1.34.5 D1: the panel's first-task demo. Local only — never the agent command chain, never the
+      // relay. Reads the first assigned tab once and outlines its first clickable element for 2.5 s:
+      // no click, no navigation, no page-data change; exactly one audit line.
+      const c = await cfg();
+      if ((c.access || 'op') === 'off') return { ok: false, code: 'NOT_ENABLED', error: '这台浏览器已停用' };
+      await groupsReady();
+      const tabs = (await chrome.tabs.query({}).catch(() => [])).filter((t) => ownGroups.has(t.groupId));
+      if (!tabs.length) return { ok: false, code: 'NO_TAB', error: '还没有授权的标签，先把一个标签拖进 FoxPaw 组' };
+      const tab = tabs[0];
+      const rows = await readFrames(tab.id, 'snapshot', { max: 200 }, true).catch(() => []);
+      const top = ((rows.find((r) => r.frameId === 0) || rows[0] || {}).result) || {};
+      let count = 0;
+      for (const r of rows) { const rr = r.result; if (rr) count += Number.isFinite(rr.total) ? rr.total : (rr.elements || []).length; }
+      const hl = await execScript(tab.id, () => {
+        const vis = (e) => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+        const el = [...document.querySelectorAll('a[href],button,input,select,textarea,[role="button"]')].find(vis);
+        if (!el) return { found: false };
+        const prev = el.style.outline;
+        el.style.outline = '3px solid #e8590c';
+        try { el.scrollIntoView({ block: 'center' }); } catch { /* noop */ }
+        setTimeout(() => { try { el.style.outline = prev; } catch { /* page gone */ } }, 2500);
+        return { found: true, text: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 40) };
+      }).catch(() => null);
+      await audit(`demo run: tab=${tab.id} elements=${count} highlighted=${!!(hl && hl.found)}`);
+      if (!hl) return { ok: false, code: 'ERROR', error: '演示没跑起来，换个页面再试' };
+      return { ok: true, title: String(top.title || tab.title || ''), count, highlighted: !!hl.found, text: hl.text || '' };
     } else if (msg.type === 'foxpaw.status') {
       refreshWebAccount();
       return connSnapshot();
@@ -6838,6 +6865,7 @@ const Conn = {
   state: 'off', reason: 'signed_out', attempt: 0, nextRetryAt: 0, since: Date.now(),
   device: null, account: null, relayVersion: '', pairingFp: '',
   extLatest: '', relayHttp: '', // 1.22 「有新版」 — the relay's download version + where to fetch it
+  channel: '', // 1.34.5: 'stable' | 'test' from the effective relay host — the panel shows 正式版 / 测试版
   retryTimer: null, hsTimer: null, keepalive: null,
   lastRx: 0, relayPings: false, startSeq: 0, sockets: new Set(), dup: null, // 1.28.1 
 };
@@ -6851,7 +6879,7 @@ function connSnapshot() {
   return {
     state: Conn.state, reason: Conn.reason, attempt: Conn.attempt, nextRetryAt: Conn.nextRetryAt,
     since: Conn.since, device: Conn.device, account: Conn.account, relayVersion: Conn.relayVersion, dup: Conn.dup,
-    extLatest: Conn.extLatest, relayHttp: Conn.relayHttp,
+    extLatest: Conn.extLatest, relayHttp: Conn.relayHttp, channel: Conn.channel,
     version: VERSION, pairingFp: Conn.pairingFp, at: Date.now(),
   };
 }
@@ -6884,6 +6912,11 @@ const MIGRATE_TO = 'foxpaw.aiyuancat.com';
 const MIGRATE_RETRY_MS = 3600e3;
 const MIGRATE_KEY = 'foxpawDomainMigrate';   // { nextTry } — when to try the new address again after a failure
 const DOMAIN_NOTE_KEY = 'foxpawDomainNote';  // { host, at } — the panel's one-time 「已切到新地址」 note (× removes it)
+// 1.34.5: channel naming — the production relay (either of its two domains) is 正式版 (stable);
+// anything else is a test-relay build （测试版） and never ships to users. Derived from the socket URL only.
+function channelOf(url) {
+  try { const h = new URL(url).host.toLowerCase(); return (h === MIGRATE_TO || MIGRATE_FROM.test(h)) ? 'stable' : 'test'; } catch { return ''; }
+}
 function migratedPairing(s) {
   const p = parsePairing(s);
   if (!p) return '';
@@ -7038,6 +7071,7 @@ async function connStart(force = false) {
   const fp = pairingFp(c.pairing);
   if (!c.pairing || !c.enabled) {
     teardown();
+    Conn.channel = channelOf((parsePairing(c.pairing) || {}).url || '');
     setState('off', { reason: c.pairing ? 'disabled' : 'signed_out', attempt: 0, pairingFp: fp });
     return;
   }
@@ -7058,6 +7092,7 @@ async function connStart(force = false) {
   const trial = migratedPairing(c.pairing) && (await migrateDue()) ? migratedPairing(c.pairing) : '';
   if (my !== Conn.startSeq) return;
   const url = trial ? parsePairing(trial).url : p.url;
+  Conn.channel = channelOf(url);
   teardown();
   Conn.trial = trial ? { from: c.pairing, to: trial } : null;
   const gen = Conn.gen;

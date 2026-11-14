@@ -159,7 +159,7 @@ const sigs = {};
 function changed(key, val) { const s = JSON.stringify(val); if (sigs[key] === s) return false; sigs[key] = s; return true; }
 
 async function load() {
-  const st = await chrome.storage.local.get(['foxpawCfg', 'foxpawUi', 'foxpawAudit', 'foxpawTasks', 'foxpawRecLibrary', 'foxpawRecording', 'foxpawFeedSeen', 'foxpawGroups', 'foxpawUpdDismissed', 'foxpawUpdNote', 'foxpawDomainNote', 'foxpawAgentsSeen']);
+  const st = await chrome.storage.local.get(['foxpawCfg', 'foxpawUi', 'foxpawAudit', 'foxpawTasks', 'foxpawRecLibrary', 'foxpawRecording', 'foxpawFeedSeen', 'foxpawGroups', 'foxpawUpdDismissed', 'foxpawUpdNote', 'foxpawDomainNote', 'foxpawAgentsSeen', 'foxpawDemoDone']);
   const tabs = await chrome.tabs.query({}).catch(() => []);
   // v1.16: only groups THIS browser created / claimed count — a
   // same-titled group synced from another device is not ours
@@ -175,6 +175,7 @@ async function load() {
     lib, rec: (st.foxpawUi || {}).recording || null, tabs: tabs || [], gids, cur: (tabs || []).find((t) => t.active) || null,
     feedSeen: st.foxpawFeedSeen || 0, updDismissed: st.foxpawUpdDismissed || '', updNote: st.foxpawUpdNote || null, domNote: st.foxpawDomainNote || null,
     agSeen: Array.isArray(st.foxpawAgentsSeen) ? st.foxpawAgentsSeen : null,   // 1.33.0: agents already introduced
+    demoDone: !!st.foxpawDemoDone, demoShown: false,   // 1.34.5 D1: first-task demo card state
   };
   if (D.cfg.access !== 'off') D.cfg.access = 'write'; // 1.27: a stored 只看 (≤1.26) = no browser-level limit
   loaded = true;
@@ -559,6 +560,8 @@ function renderUpdBar() {
   $('updBar').classList.toggle('hidden', !show);
   if (!show) return;
   $('updText').textContent = `有新版 ${latest}`;
+  $('updCurVer').textContent = cur; // 1.34.5: current version + channel, so 版本混乱 has one glanceable answer
+  $('updCurChan').textContent = conn.channel === 'test' ? '测试版' : '正式版';
   const perms = permNotesBetween(cur, latest);
   $('updPerm').textContent = perms.join('；');
   $('updPerm').classList.toggle('hidden', !perms.length);
@@ -898,6 +901,8 @@ function renderAgent() {
     $('offWait').classList.toggle('hidden', !loginPolling);
   }
   $('firstAgent').classList.toggle('hidden', onboarding || list.length > 0 || !online);
+  // 1.34.5 D1: the demo card lives between 接入 and the first real task; a result just shown stays until the panel closes
+  $('demoCard').classList.toggle('hidden', !(online && !onboarding && !(D.tasks || []).length && (!D.demoDone || D.demoShown)));
   if (!onboarding && online && !list.length) {
     // 1.20: the three steps keep real progress ticks after connecting (①✓ connected, ② ✓ once a tab is authorized)
     const st = [true, mine.length > 0, false];
@@ -1568,6 +1573,10 @@ function renderMe() {
     $('meVer').textContent = mm ? `FoxPaw 内测版 ${mm}` : '—';
     $('meVer').title = full;
   }
+  { // 1.34.5: channel next to the version （正式版 = production relay, 测试版 = test relay, never shipped)
+    const chw = $('meChanWrap');
+    if (chw) { const ch = conn.channel; chw.classList.toggle('hidden', !ch); if (ch) $('meChan').textContent = ch === 'test' ? '测试版' : '正式版'; }
+  }
   document.querySelectorAll('#sensSeg button').forEach((b) => b.classList.toggle('on', b.dataset.v === (D.cfg.sensitive || 'ask')));
   const rules = Object.entries(D.cfg.siteRules || {});
   $('rulesCount').textContent = `${rules.length} 条`;
@@ -1643,6 +1652,31 @@ $('ftConsole').onclick = () => openConsole('overview');
 // 1.33.0 (relay 3.8.7): 「邀请 Agent」 opens the console's invite dialog straight away (#invite; older relays: overview)
 $('obInvite').onclick = () => openConsole('invite');
 $('firstAgentGo').onclick = () => openConsole('invite');
+/* 1.34.5 D1: first-task demo — the panel asks the background to run it locally (foxpaw.demoRun);
+   success or 不用了 both retire the card for good (foxpawDemoDone, written here in the panel). */
+$('demoGo').onclick = async () => {
+  const btn = $('demoGo'), msg = $('demoMsg');
+  btn.disabled = true;
+  try {
+    const r = await send({ type: 'foxpaw.demoRun' });
+    if (r && r.ok) {
+      msg.textContent = `刚刚读了「${r.title || '当前页'}」，数到 ${r.count} 个能操作的东西${r.highlighted ? `，并把第一个能点的「${r.text || '按钮'}」描了出来` : ''}。真正的任务也是这样干活——把要做的事发给你的 Agent 就行。`;
+      D.demoDone = true; D.demoShown = true;
+      chrome.storage.local.set({ foxpawDemoDone: 1 }).catch(() => {});
+      $('demoGo').classList.add('hidden'); $('demoSkip').classList.add('hidden');
+    } else {
+      msg.textContent = (r && r.error) || '演示没跑起来，换个页面再试';
+    }
+  } catch { msg.textContent = '演示没跑起来，稍后再试'; }
+  msg.classList.remove('hidden');
+  btn.disabled = false;
+  schedule();
+};
+$('demoSkip').onclick = () => {
+  D.demoDone = true;
+  chrome.storage.local.set({ foxpawDemoDone: 1 }).catch(() => {});
+  schedule();
+};
 $('agInvite').onclick = () => openConsole('invite');
 
 // 我来录: one click starts. A current page outside the FoxPaw group joins it first (it is the start page).
@@ -1772,7 +1806,7 @@ async function openSite(url) {
 }
 document.querySelectorAll('#manage .row[data-go]').forEach((r) => { r.onclick = () => openConsole(r.dataset.go); });
 $('goHome').onclick = () => openSite(siteBase() + '/');
-$('goFeedback').onclick = () => { try { chrome.tabs.create({ url: 'mailto:foxpaw@aiyuancat.com' }); } catch (_) { location.href = 'mailto:foxpaw@aiyuancat.com'; } };
+$('goFeedback').onclick = () => { try { chrome.tabs.create({ url: 'mailto:muse-foxe@aiyuancat.com' }); } catch (_) { location.href = 'mailto:muse-foxe@aiyuancat.com'; } };
 $('meReconnect').onclick = () => send({ type: 'foxpaw.reconnect' }).catch(() => {});
 $('meNotifyTest').onclick = async () => {
   const r = await send({ type: 'foxpaw.notifyTest' }).catch(() => null);

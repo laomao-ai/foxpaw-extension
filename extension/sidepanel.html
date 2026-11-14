@@ -479,7 +479,7 @@
   .rhint { padding:8px 12px; border-radius:12px; background:var(--fp-fill); font-size:var(--fs-sm); color:var(--fp-text-secondary); margin-bottom:var(--s3); line-height:1.5; }
   .rwarn { font-size:var(--fs-sm); color:var(--fp-amber); margin:-4px 2px var(--s2); }
   /* 1.22 ：「有新版」小条 —— 顶部一行、不打扰、可关闭；390px 不溢出 */
-  .updbar { display:flex; align-items:flex-start; gap:8px; margin:8px var(--s4) 0; padding:7px 8px 7px 12px; border-radius:10px; background:var(--blue-soft); font-size:var(--fs-sm); line-height:1.45; flex:none; min-width:0; }
+  .updbar { display:flex; align-items:flex-start; gap:8px; margin:8px var(--s4) 0; padding:6px 8px 6px 12px; border-radius:10px; background:var(--blue-soft); font-size:var(--fs-sm); line-height:1.45; flex:none; min-width:0; }
   .updbar.hidden, .updbar .uh.hidden { display:none; }
   /* 1.24 ：「扩展版本」行的「检查更新」小链接 */
   .row .chk { flex:none; color:var(--fp-orange-ink); font-weight:600; font-size:var(--fs-sm); height:28px; padding:0 4px; border-radius:8px; white-space:nowrap; cursor:pointer; }
@@ -489,6 +489,7 @@
   .updbar .um b { font-weight:700; color:var(--blue); }
   .updbar .um a { color:var(--blue); font-weight:700; text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
   .updbar .uh { font-size:var(--fs-xs); color:var(--fp-text-muted); margin-top:1px; }
+  .updbar .upd-cur { font-size:var(--fs-xs); line-height:1.3; margin-top:1px; color:var(--fp-text-muted); }
   .updbar .ux { flex:none; width:22px; height:22px; border:0; border-radius:6px; background:transparent; color:var(--fp-text-muted); font-size:16px; line-height:1; cursor:pointer; padding:0; }
   .updbar .ux:hover { background:rgba(0,0,0,.06); }
   /* 1.21 ：运行卡（运行中 / 暂停等处理）、录制会话标签、网络请求说明、「加入录制？」小条 */
@@ -824,6 +825,7 @@
     <!-- 1.22 ：当前版本 < 中继下载件版本时提示；关闭后同一版本不再提示 -->
     <div class="updbar hidden" id="updBar" role="status" aria-live="polite">
       <div class="um"><b id="updText">有新版</b> · <a href="#" id="updDl">下载</a>
+        <div class="uh" id="updCurRow"><span>当前版本</span> <span id="updCurVer"></span> · <span id="updCurChan">正式版</span></div>
         <div class="uh hidden" id="updPerm"></div>
         <div class="uh">解压覆盖原文件夹后，在扩展页点「重新加载」</div></div>
       <button class="ux" id="updX" title="关闭（这个版本不再提示）" aria-label="关闭新版提示">×</button>
@@ -885,10 +887,17 @@
             <p class="muted">一键生成邀请发给你的 Agent，它接入后会出现在这里。它默认看不到任何页面，只能看你逐个授权的标签。</p></div></div>
             <div class="btnrow"><button class="btn pri" id="firstAgentGo">邀请 Agent</button></div>
           </div>
+          <div class="card hidden" id="demoCard">
+            <div class="fah"><span class="ei" aria-hidden="true"><svg><use href="#i-eye"/></svg></span><div><b>先试一下 FoxPaw 怎么干活</b>
+            <p class="muted">点一下，FoxPaw 会读一遍你授权的第一个标签页，再把页面上第一个能点的东西用橙色描出来给你看——只是演示：不点击、不改页面、不会真的发任务。</p></div></div>
+            <div class="btnrow"><button class="btn pri" id="demoGo">试一下</button><button class="btn" id="demoSkip">不用了</button></div>
+            <p class="muted hidden" id="demoMsg" role="status"></p>
+          </div>
           <div class="sec" id="tabSec"><span class="sh">授权的标签 <span class="cntb" id="tabCount">0</span></span><span class="sp"></span><button class="link" id="btnAssign" aria-label="授权当前页">＋ 当前页</button></div>
           <div class="hint hidden" id="foreignHint"></div>
           <div class="hint hidden" id="unclaimedHint"><span id="unclaimedText"></span><button class="link" id="btnClaimGroups">认领这个组</button></div>
           <div class="list" id="tabList"></div>
+          <p class="hint" id="revokeHint">随时收回控制：点一下页面、按 Esc，或把标签拖出 FoxPaw 组，Agent 立刻停手；拖出去的标签，它之后也碰不到。</p>
         </div>
       </section>
 
@@ -985,7 +994,7 @@
         <!-- 1.27: the browser-level 停用 / 只看 / 可操作 is gone — permission is per agent (its row's chip / ⋯); 全部暂停 is on the island -->
         <div class="row"><span class="k">敏感动作</span><span class="sp"></span><div class="seg plain" id="sensSeg"><button data-v="ask">每次问我</button><button data-v="rules">按站点规则</button></div></div>
         <div class="row" id="langRow"><span class="k">语言</span><span class="sp"></span><div class="seg plain" id="langSeg" translate="no" aria-label="Language"><button data-v="zh" type="button">中文</button><button data-v="en" type="button">English</button></div></div>
-        <div class="row" id="verRow"><span class="k">扩展版本</span><span class="v" id="meVer">—</span><button class="chk" id="meChk" type="button" title="向中继查一下有没有新版">检查更新</button></div>
+        <div class="row" id="verRow"><span class="k">扩展版本</span><span class="v"><span id="meVer">—</span><span id="meChanWrap" class="hidden"> · <span id="meChan">正式版</span></span></span><button class="chk" id="meChk" type="button" title="向中继查一下有没有新版">检查更新</button></div>
         <div class="row link hidden" id="meSwitch"><span class="t sp">切换账号</span><span class="chev">›</span></div>
         <div class="row link danger" id="meSignOut"><span class="t sp">断开这台浏览器</span></div>
       </div>
@@ -996,7 +1005,7 @@
         <div class="row link" data-go="overview"><span class="t sp">控制台</span><span class="chev">›</span></div>
         <div class="row link" data-go="account"><span class="t sp">账户</span><span class="chev">›</span></div>
         <div class="row link" id="goHome"><span class="t sp">官网首页</span><span class="chev">›</span></div>
-        <div class="row link" id="goFeedback" title="foxpaw@aiyuancat.com"><span class="t sp">产品反馈</span><span class="v">foxpaw@aiyuancat.com</span><span class="chev">›</span></div>
+        <div class="row link" id="goFeedback" title="muse-foxe@aiyuancat.com"><span class="t sp">产品反馈</span><span class="v">muse-foxe@aiyuancat.com</span><span class="chev">›</span></div>
       </div>
       <div class="sec">高级</div>
       <div class="list">
