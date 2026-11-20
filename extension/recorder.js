@@ -145,6 +145,62 @@
     if (c === 'datecell') return { el: el.closest('.ant-picker-cell,td'), c };
     return { el, c };
   };
+  /* 1.34.6: parent chain (up to 3 levels of tag#id.class) — a fallback leg for every step */
+  const ancOf = (el) => {
+    const out = [];
+    let n = el.parentElement;
+    for (let d = 0; n && n.nodeType === 1 && d < 3; d++) {
+      let s = n.tagName.toLowerCase();
+      if (n.id) s += '#' + n.id;
+      const cn = typeof n.className === 'string' ? n.className : (n.className && n.className.baseVal) || '';
+      const cs = tx(cn).split(' ').filter(Boolean).slice(0, 3).join('.');
+      if (cs) s += '.' + cs;
+      out.push(s.slice(0, 60));
+      n = n.parentElement;
+    }
+    return out.length ? out : undefined;
+  };
+  /* 1.34.6: per-step outerHTML snapshot (≤2048 chars) so a failed replay can be
+     diagnosed offline. HARD privacy line: a snapshot never carries a field's current
+     value — secret fields get none at all; text fields / editable regions are cloned
+     SHALLOW (no children, no typed content); deep clones lose descendant textarea
+     contents and input/option value attributes, and any serialized value="…" left
+     over is masked here (the relay-side redaction pass scrubs it once more). */
+  const TEXTY_ROLES = /^(textbox|searchbox|spinbutton|combobox)$/;
+  const snapHtml = (el) => {
+    try {
+      if (!el || !el.tagName || secretKind(el) || PW.has(el)) return undefined;
+      // 1.34.6 review fix: the field test is not tag-only. ARIA text controls
+      // (role=textbox & friends — the pseudo-inputs component libraries render
+      // the current value into) count as text fields wherever they sit in the
+      // ancestor chain, and a secret-hinted one gets no snapshot at all: a
+      // deep clone of such an element would carry its rendered current value.
+      let texty = isTextField(el) || TEXTY_ROLES.test(roleOf(el) || '');
+      for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+        if (isTextField(n) || n.isContentEditable || TEXTY_ROLES.test(roleOf(n) || '')) {
+          texty = true;
+          const hint = [attr(n, 'name'), n.id, attr(n, 'placeholder'), attr(n, 'aria-label'), labelText(n)].join(' ');
+          if (SECRET_HINT.test(hint) || PW.has(n)) return undefined;
+          break;
+        }
+      }
+      let c;
+      if (texty || !el.querySelectorAll || el.querySelectorAll('*').length > 200) c = el.cloneNode(false);
+      else {
+        c = el.cloneNode(true);
+        for (const t of c.querySelectorAll('textarea')) t.textContent = '';
+        for (const ce of c.querySelectorAll('[contenteditable]')) ce.textContent = '';
+        for (const pi of c.querySelectorAll('[role="textbox"],[role="searchbox"],[role="spinbutton"],[role="combobox"]')) pi.textContent = '';
+        for (const sc of c.querySelectorAll('script,style,template,noscript')) sc.remove();
+        for (const i of c.querySelectorAll('input,option')) i.removeAttribute('value');
+      }
+      if (c.removeAttribute && /^(INPUT|OPTION)$/.test(c.tagName)) c.removeAttribute('value');
+      let s = c.outerHTML || '';
+      s = s.replace(/value\s*=\s*"[^"]*"/gi, 'value="•••"').replace(/value\s*=\s*'[^']*'/gi, "value='•••'");
+      if (!s) return undefined;
+      return s.length > 2048 ? s.slice(0, 2048) + '…' : s;
+    } catch { return undefined; }
+  };
   const describe = (raw) => {
     const { el, c } = widget(raw);
     if (!el || !el.tagName) return null;
@@ -161,6 +217,16 @@
       wasPassword: PW.has(el) || undefined, editable: (el.isContentEditable && el.tagName !== 'INPUT') || undefined,
       css: cssPath(el), comp: c, shadow: (el.getRootNode && el.getRootNode() !== document) || undefined,
     };
+    // 1.34.6: selector fallbacks on EVERY step (existing fields untouched, only
+    // missing legs added) + the privacy-gated snapshot — no step is left with only
+    // a positional css path to stand on
+    const ttl = tx(attr(el, 'title')).slice(0, 80); if (ttl) d.title = ttl;
+    const altA = tx(attr(el, 'alt')).slice(0, 80); if (altA) d.alt = altA;
+    const aria = tx(attr(el, 'aria-label')).slice(0, 80); if (aria) d.aria = aria;
+    const cnA = typeof el.className === 'string' ? el.className : (el.className && el.className.baseVal) || '';
+    const cls = tx(cnA).slice(0, 120); if (cls) d.cls = cls;
+    const anc = ancOf(el); if (anc) d.anc = anc;
+    const html = snapHtml(el); if (html) d.html = html;
     const nth = nthOf(el, role, name); if (nth) d.nth = nth;
     if (c === 'option') d.optionText = tx(attr(el, 'title') || el.textContent).slice(0, 120);
     if (c === 'datecell') d.date = attr(el, 'title') || undefined;
@@ -222,11 +288,13 @@
       send({ kind: 'press', key: k, mods: mods.length ? mods : undefined, el: d || undefined, ...(e.isTrusted === false ? { synthetic: true } : {}) });
     }
   }, true);
+  let dragMark = null; // 1.34.6: {el, at} of a just-recorded drag — its trailing click is the same gesture
   document.addEventListener('click', (e) => {
     if (asked && !on) return;
     if (inCaptcha(e.composedPath ? e.composedPath()[0] : e.target)) return; // 录制 2.0: nothing inside a human-verification widget is recorded
     const t = realTarget(e);
     if (!t || t === document.body || t === document.documentElement) return;
+    if (dragMark && Date.now() - dragMark.at < 250 && (t === dragMark.el || dragMark.el.contains(t) || (t.contains && t.contains(dragMark.el)))) { dragMark = null; return; }
     // the click a browser fires on the default button when Enter submits a form (implicit
     // submission: detail 0, no pointer position) is the Enter step, not a second action
     if (e.detail === 0 && !e.clientX && !e.clientY && Date.now() - lastEnter < 600) return;
@@ -234,6 +302,64 @@
     const d = describe(t);
     if (d) send({ kind: 'click', el: d, ...(e.isTrusted === false ? { synthetic: true } : {}) });
   }, true);
+  /* ---- 1.34.6: drag gestures (slider handles, drag-sort, canvas tools) ----
+     pointerdown → pointermove → pointerup become ONE drag step when the gesture
+     clears the threshold (displacement ≥10px, or ≥5px held ≥400ms); below it
+     the ordinary click path above (unchanged) owns the tap. Same hard lines as
+     click: nothing inside a human-verification widget (the 录制 2.0 no-track
+     rule stands — captcha sliders stay owner-only), and a drag that starts on a
+     text field / editable region is a selection, not an action (range inputs
+     are controls, not text fields, and DO record). */
+  let pDown = null; // {x, y, lx, ly, t, el, syn, pid, r, pr} — r/pr are the target and
+  // container rects read AT pointerdown: a dragged element moves with the gesture,
+  // so a rect read at pointerup would misplace the recorded grab point
+  const dragControl = (el) => !!el && (el.tagName === 'CANVAS' || el.tagName === 'INPUT' || el.draggable === true || /^(slider|scrollbar)$/.test(attr(el, 'role') || ''));
+  document.addEventListener('pointerdown', (e) => {
+    pDown = null; // any new press retires a stale gesture (its pointerup may have been
+    // missed off-window) — a leftover start must never pair with a later pointerup
+    if (asked && !on) return;
+    if (e.button !== 0) return;
+    const raw = e.composedPath ? e.composedPath()[0] : e.target;
+    if (!raw || inCaptcha(raw)) return;
+    const t = realTarget(e);
+    if (!t || t === document.body || t === document.documentElement) return;
+    if (isTextField(t) || isTextField(editableHost(raw))) return;
+    let r0 = null, pr0 = null;
+    try { r0 = t.getBoundingClientRect(); const pe = t.parentElement; pr0 = pe && pe.getBoundingClientRect ? pe.getBoundingClientRect() : r0; } catch { /* rects fall back to up-time */ }
+    pDown = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, t: Date.now(), el: t, syn: e.isTrusted === false, pid: e.pointerId, r: r0, pr: pr0 };
+  }, true);
+  document.addEventListener('pointermove', (e) => { if (pDown && (pDown.pid == null || e.pointerId == null || e.pointerId === pDown.pid)) { pDown.lx = e.clientX; pDown.ly = e.clientY; } }, true);
+  document.addEventListener('pointerup', (e) => {
+    const pd = pDown;
+    if (!pd) return;
+    if (pd.pid != null && e.pointerId != null && e.pointerId !== pd.pid) return; // another finger's release: the gesture is still open
+    pDown = null;
+    const ux = e.clientX || e.clientY ? e.clientX : pd.lx, uy = e.clientX || e.clientY ? e.clientY : pd.ly;
+    const dx = Math.round(ux - pd.x), dy = Math.round(uy - pd.y);
+    const dist = Math.hypot(ux - pd.x, uy - pd.y);
+    const dur = Date.now() - pd.t;
+    if (!(dist >= 10 || (dist >= 5 && dur >= 400))) return; // a tap / click wobble: the click path owns it
+    if (inCaptcha(e.composedPath ? e.composedPath()[0] : e.target)) return;
+    // a gesture that produced a text selection is a selection, not an action —
+    // unless it started on a control (slider / draggable / canvas / input), whose
+    // drags stay actions even with a stale selection lying around
+    if (!dragControl(pd.el)) { let sel = ''; try { sel = String((W.getSelection && W.getSelection()) || ''); } catch { /* no selection api */ } if (sel.trim()) return; }
+    flushAll();
+    const d = describe(pd.el); if (!d) return;
+    let r = pd.r, pr = pd.pr;
+    if (!r) { try { r = pd.el.getBoundingClientRect(); pr = pd.el.parentElement && pd.el.parentElement.getBoundingClientRect ? pd.el.parentElement.getBoundingClientRect() : r; } catch { return; } }
+    const pct = (v, a, b) => Math.round(Math.max(0, Math.min(100, b > 0 ? (v - a) / b * 100 : 50)) * 10) / 10;
+    dragMark = { el: pd.el, at: Date.now() };
+    send({ kind: 'drag', el: d,
+      from: { x: pct(pd.x, r.left, r.width), y: pct(pd.y, r.top, r.height) },
+      to: { x: pct(ux, r.left, r.width), y: pct(uy, r.top, r.height) },
+      dx, dy, dur,
+      rect: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)],
+      box: [Math.round(pr.left), Math.round(pr.top), Math.round(pr.width), Math.round(pr.height)],
+      ...(pd.syn ? { synthetic: true } : {}) });
+  }, true);
+  document.addEventListener('pointercancel', () => { pDown = null; }, true);
+  W.addEventListener('blur', () => { pDown = null; }, true);
   W.addEventListener('pagehide', () => flushAll(), true);
 
   /* ---- 录制 2.0: copy → output, UI changes, storage key names, human-verification marks ---- */

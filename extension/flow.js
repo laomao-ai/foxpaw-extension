@@ -12,7 +12,7 @@
 (function (root) {
   'use strict';
   const SCHEMA = 'foxpaw.flow/1';
-  const STEP_TYPES = ['navigate', 'click', 'fill', 'select', 'check', 'press', 'upload', 'wait', 'assert', 'scroll',
+  const STEP_TYPES = ['navigate', 'click', 'drag', 'fill', 'select', 'check', 'press', 'upload', 'wait', 'assert', 'scroll',
     'extract', 'paginate', 'visit', 'closeTab', 'userStep', 'waitInput', 'output'];
   const SECRET_KINDS = ['password', 'otp', 'card', 'token'];
   const PII_KINDS = ['email', 'phone', 'idcard', 'account'];
@@ -264,6 +264,7 @@
         if (!/^t\d+$/.test(tab)) e(`${w}: tab must look like t0, t1 …`);
         else if (!tabs.has(tab)) e(`${w}: tab ${tab} is used before a step opens it`);
         const needT = () => { if (!validTarget(s.target)) e(`${w} (${s.type}): target needs role+name / label / placeholder / testId / text / css`); };
+        const isPct = (v) => typeof v === 'number' && v >= 0 && v <= 100;
         if (s.note !== undefined && (typeof s.note !== 'string' || s.note.length > 500)) e(`${w}: note must be a string (≤500)`);
         if (s.after !== undefined) {
           const a = s.after;
@@ -277,6 +278,14 @@
           case 'navigate': if (typeof s.url !== 'string' || !/^https?:\/\//.test(s.url)) e(`${w}: navigate.url must be http(s)`); break;
           case 'click': needT();
             if (s.opens !== undefined) { if (!/^t\d+$/.test(s.opens) || s.opens === 't0') e(`${w}: opens must be a new tab ref (t1, t2 …)`); else tabs.add(s.opens); }
+            break;
+          case 'drag': needT();
+            if (!isObj(s.from) || !isPct(s.from.x) || !isPct(s.from.y)) e(`${w}: drag.from needs {x, y} percentages 0..100`);
+            if (s.to !== undefined && (!isObj(s.to) || !isPct(s.to.x) || !isPct(s.to.y))) e(`${w}: drag.to needs {x, y} percentages 0..100`);
+            if (!(Number.isFinite(s.dx) && Number.isFinite(s.dy)) || (s.dx === 0 && s.dy === 0)) e(`${w}: drag needs a non-zero dx/dy displacement`);
+            if (s.dxr !== undefined && !Number.isFinite(s.dxr)) e(`${w}: drag.dxr must be a number`);
+            if (s.dyr !== undefined && !Number.isFinite(s.dyr)) e(`${w}: drag.dyr must be a number`);
+            if (s.dur !== undefined && !(Number.isFinite(s.dur) && s.dur >= 0)) e(`${w}: drag.dur must be ≥ 0`);
             break;
           case 'fill': needT(); checkValue(s.value, w); break;
           case 'select': needT(); checkValue(s.value, w); break;
@@ -350,6 +359,7 @@
   }
 
   /* ---------- recording -> flow ---------- */
+  const clampPct = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.round(Math.max(0, Math.min(100, n)) * 10) / 10 : 50; };
   const TEXTISH = /^(textbox|searchbox|spinbutton)$/;
   function isTexty(d) { return !!d && (TEXTISH.test(d.role || '') || (d.tag === 'input' && !/^(checkbox|radio|button|submit|reset|file|image|range|color)$/.test(d.type || '')) || d.tag === 'textarea' || d.editable); }
   function isCheckish(d) { return !!d && ((d.tag === 'input' && /^(checkbox|radio)$/.test(d.type || '')) || /^(checkbox|radio|switch)$/.test(d.role || '') || d.labelFor === 'check'); }
@@ -534,9 +544,29 @@
             break;
           }
           const prev = steps[steps.length - 1];
+          // a click trailing a drag on the same target (the recorder's own suppression
+          // missed it — the gesture ended off-element): the drag owns the gesture
+          if (prev && prev.type === 'drag' && prev.tab === tab && sameTarget(prev.target, tgt) && s.ts && prev._rts && s.ts - prev._rts < 300) break;
           // double click events on the same thing within 300 ms (label + control): one click
           if (prev && prev.type === 'click' && prev.tab === tab && sameTarget(prev.target, tgt) && s.ts && prev._ts && s.ts - prev._ts < 300) break;
           lastAction = push({ type: 'click', tab, target: tgt, _ts: s.ts });
+          break;
+        }
+        case 'drag': {
+          // 1.34.6: a recorded drag gesture — from/to are percentages of the target's
+          // own rect; dxr/dyr are the displacement relative to the CONTAINER rect, so the
+          // replay scales with the current layout instead of trusting recorded pixels
+          if (!tgt) break;
+          const dx = Math.round(Number(s.dx) || 0), dy = Math.round(Number(s.dy) || 0);
+          if (!dx && !dy) break;
+          const prev = steps[steps.length - 1];
+          if (prev && prev.type === 'drag' && prev.tab === tab && sameTarget(prev.target, tgt) && s.ts && prev._rts && s.ts - prev._rts < 300) break; // same gesture, reported twice
+          const st = { type: 'drag', tab, target: tgt, from: { x: clampPct(s.from && s.from.x), y: clampPct(s.from && s.from.y) }, dx, dy };
+          if (s.to) st.to = { x: clampPct(s.to.x), y: clampPct(s.to.y) };
+          if (s.box && s.box[2] > 0) st.dxr = Math.round(dx / s.box[2] * 1000) / 1000;
+          if (s.box && s.box[3] > 0) st.dyr = Math.round(dy / s.box[3] * 1000) / 1000;
+          if (Number.isFinite(s.dur)) st.dur = Math.round(s.dur);
+          lastAction = push(st);
           break;
         }
         case 'fill': {
@@ -812,7 +842,7 @@ async function extractRows(p, spec) {
       const af = s.after || {};
       if (af.storage) L.push(`${I}// 这一步改了存储（只记键名）：${[af.storage.local && 'localStorage ' + af.storage.local.join('、'), af.storage.cookie && 'cookie ' + af.storage.cookie.join('、'), af.storage.removed && '删除 ' + af.storage.removed.join('、')].filter(Boolean).join('；')}`);
       const wreq = Array.isArray(af.requests) && af.requests.length && ['click', 'fill', 'select', 'check', 'press', 'upload'].includes(s.type);
-      const wui = Array.isArray(af.ui) && af.ui.length && ['click', 'fill', 'select', 'check', 'press', 'upload'].includes(s.type);
+      const wui = Array.isArray(af.ui) && af.ui.length && ['click', 'drag', 'fill', 'select', 'check', 'press', 'upload'].includes(s.type);
       if (wreq || wui) { L.push(`${I}{`); if (wreq) L.push(`${I}  const _w = waitReq(${p}, ${J(af.requests.map((r) => ({ method: r.method || 'GET', url: r.url })))});`); }
       const closeAfter = () => { if (wreq) L.push(`${I}  await _w;`); if (wui) L.push(`${I}  await softText(${p}, ${J(af.ui.map((u) => u.text))});`); if (wreq || wui) L.push(`${I}}`); };
       switch (s.type) {
@@ -823,6 +853,18 @@ async function extractRows(p, spec) {
           } else if (s.closes) L.push(`${I}await (${T(s.target)}).click({ noWaitAfter: true }).catch((e) => { if (!${p}.isClosed()) throw e; });`);
           else L.push(`${I}await (${T(s.target)}).click();`);
           break;
+        case 'drag': {
+          // 1.34.6: grab the target at the recorded offset %, move by the recorded
+          // displacement — scaled by the CURRENT container size when the step carries
+          // dxr/dyr (recorded pixels are only the fallback)
+          const fxn = Number(s.from && s.from.x), fyn = Number(s.from && s.from.y);
+          const fx = Number.isFinite(fxn) ? fxn : 50, fy = Number.isFinite(fyn) ? fyn : 50; // a recorded 0% grab point is real (slider at its end) — || 50 would move it to the middle
+          let code = `{ const l = ${T(s.target)}; const b = await l.boundingBox(); if (!b) throw new Error('drag target has no bounding box'); const sx = b.x + b.width * ${fx} / 100, sy = b.y + b.height * ${fy} / 100; let ex = sx + ${Number(s.dx) || 0}, ey = sy + ${Number(s.dy) || 0};`;
+          if (s.dxr !== undefined || s.dyr !== undefined) code += ` const pb = await l.locator('..').boundingBox().catch(() => null); if (pb) { ${s.dxr !== undefined ? `ex = sx + ${s.dxr} * pb.width; ` : ''}${s.dyr !== undefined ? `ey = sy + ${s.dyr} * pb.height;` : ''} }`;
+          code += ` await ${p}.mouse.move(sx, sy); await ${p}.mouse.down(); await ${p}.mouse.move(ex, ey, { steps: 12 }); await ${p}.mouse.up(); }`;
+          L.push(I + code);
+          break;
+        }
         case 'fill':
           if (s.kind === 'date') L.push(`${I}{ const l = ${T(s.target)}; if (await l.evaluate((e) => !!e.closest('.ant-picker'))) { await l.click(); await l.fill(${val(s.value)}); await l.press('Enter'); } else await l.fill(${val(s.value)}); }`);
           else L.push(`${I}await (${T(s.target)}).fill(String(${val(s.value)}));`);

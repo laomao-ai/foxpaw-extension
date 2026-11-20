@@ -11,7 +11,7 @@ if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
 }
 
 const GROUP_TITLE = 'FoxPaw';
-const VERSION = '1.34.5';
+const VERSION = '1.34.6';
 // 1.17 录制版: the flow format / conversion / Playwright export
 // live in flow.js (pure, shared with Node tests and tools)
 const FF = (() => { try { if (typeof importScripts === 'function' && !self.FoxFlow) importScripts('flow.js'); } catch (e) { console.warn('[foxpaw] flow.js not loaded', e); } return self.FoxFlow || null; })();
@@ -164,7 +164,19 @@ const ACCT_CFG = ['siteRules', 'remembered', 'agentPause', 'sensitive'];
 const DISABLED_PREFIX = '已停用 · ';
 let acctChain = Promise.resolve();
 function acctSerial(fn) { acctChain = acctChain.catch(() => {}).then(fn); return acctChain; }
+/* 1.34.6: while an account transition runs, group reclaim stands down.
+   acctDeactivateNow retitles our groups to the disabled stash title and
+   only then clears ownGroups + persists; a reclaim pass interleaved into
+   that window re-trusts the stored ids in loadGroups and resurrects the
+   just-stashed group under the NEXT account (e2e-account ③ caught it).
+   Set synchronously at the head of both transitions, cleared at the tail;
+   transitions themselves drive groupsReady() for the state they need. */
+let acctBusy = 0; // depth counter: activate nests a deactivate inside itself
 async function acctDeactivateNow(why) {
+  acctBusy++;
+  try { return await acctDeactivateInner(why); } finally { acctBusy--; if (acctBusy === 0 && reclaimAgain) { reclaimAgain = false; reclaimGroups().catch(() => {}); } }
+}
+async function acctDeactivateInner(why) {
   const st = await chrome.storage.local.get([ACCT_KEY, ACCT_STASH, 'foxpawRecLibrary', 'foxpawTasks', 'foxpawTaskTombstones', GROUPS_KEY]);
   const id = st[ACCT_KEY];
   if (!id) return false;
@@ -175,15 +187,22 @@ async function acctDeactivateNow(why) {
   for (const gid of [...ownGroups]) {
     let title = '';
     try { const g = await chrome.tabGroups.get(gid); title = g.title || ''; } catch { /* gone */ }
-    const dis = DISABLED_PREFIX + (title || groupTitle(label));
-    try { await chrome.tabGroups.update(gid, { title: dis, color: 'grey' }); } catch { /* gone */ }
-    groups.push({ id: gid, title: dis });
+    groups.push({ id: gid, title: DISABLED_PREFIX + (title || groupTitle(label)) });
   }
-  try { const tabs = (await chrome.tabs.query({})) || []; for (const t of tabs) if (isOwnGroup(t.groupId) || adopted.has(t.id)) await detachDebugger(t.id); } catch { /* noop */ }
-  ownGroups.clear(); adopted.clear(); saveAdopted();
+  // 1.34.6 review fix: persist the stash entry BEFORE retitling any group.
+  // The old order retitled first and wrote the stash last, so a crash / SW
+  // kill mid-sequence left groups carrying the disabled title with no stash
+  // entry anywhere — unrecoverable orphans (loadGroups prunes disabled
+  // titles on sight, and activate restores only from the stash). Stash-first,
+  // a crash leaves either the account still connected with its groups
+  // claimed, or the stash in place for the retitles that did land.
   const stash = { ...(st[ACCT_STASH] || {}) };
   stash[id] = { at: Date.now(), groups, recLibrary: st.foxpawRecLibrary || [], tasks: st.foxpawTasks || [],
     tombstones: st.foxpawTaskTombstones || [], cfg: Object.fromEntries(ACCT_CFG.map((k) => [k, c[k]])) };
+  await chrome.storage.local.set({ [ACCT_STASH]: stash });
+  for (const g of groups) { try { await chrome.tabGroups.update(g.id, { title: g.title, color: 'grey' }); } catch { /* gone */ } }
+  try { const tabs = (await chrome.tabs.query({})) || []; for (const t of tabs) if (isOwnGroup(t.groupId) || adopted.has(t.id)) await detachDebugger(t.id); } catch { /* noop */ }
+  ownGroups.clear(); adopted.clear(); saveAdopted();
   await chrome.storage.local.set({ [ACCT_STASH]: stash, [ACCT_KEY]: '', foxpawRecLibrary: [], foxpawTasks: [], foxpawTaskTombstones: [] });
   await saveCfg(Object.fromEntries(ACCT_CFG.map((k) => [k, DEFAULTS[k]])));
   await saveGroups({ migrated: true });
@@ -192,6 +211,10 @@ async function acctDeactivateNow(why) {
   return true;
 }
 async function acctActivateNow(id) {
+  acctBusy++;
+  try { return await acctActivateInner(id); } finally { acctBusy--; if (acctBusy === 0 && reclaimAgain) { reclaimAgain = false; reclaimGroups().catch(() => {}); } }
+}
+async function acctActivateInner(id) {
   if (!id) return;
   const st = await chrome.storage.local.get([ACCT_KEY, ACCT_STASH]);
   if (st[ACCT_KEY] === id) return;
@@ -206,7 +229,9 @@ async function acctActivateNow(id) {
     let back = 0;
     let tabsAll = null;
     for (const g of mine.groups || []) {
-      let hit = live.find((x) => x.id === g.id && x.title === g.title);
+      // the group may still carry its live title when a crash hit the previous
+      // deactivate after the stash write but before the retitle landed
+      let hit = live.find((x) => x.id === g.id && (x.title === g.title || x.title === groupTitle(label)));
       if (!hit) {
         // 1.34.4: the stash restore had the same "exactly one match"
         // pathology as loadGroups — duplicate same-titled copies (restart
@@ -506,12 +531,24 @@ async function loadGroups() {
     for (const e of Array.isArray(l1) ? l1 : []) if (e && adopted.has(e.tabId)) adoptMeta.set(e.tabId, { url: e.url || '', at: e.at || Date.now() });
   } catch { /* no session storage */ }
   let groups = [];
-  try { groups = (await chrome.tabGroups.query({})) || []; } catch { groups = []; }
-  if (!Array.isArray(groups)) groups = [];
-  const live = new Set(groups.map((g) => g.id));
+  let queryOk = true;
+  try { groups = (await chrome.tabGroups.query({})) || []; } catch { groups = []; queryOk = false; }
+  if (!Array.isArray(groups)) { groups = []; queryOk = false; }
+  const byId = new Map(groups.map((g) => [g.id, g]));
   let changed = false;
-  // records that no longer exist (browser restart) -> drop, then re-claim by exact device title
-  for (const id of [...ownGroups]) if (!live.has(id)) { ownGroups.delete(id); changed = true; }
+  // records that no longer exist (browser restart) -> drop, then re-claim by exact device title.
+  // 1.34.6: a group carrying the disabled stash title is set aside for another
+  // account — never ours, even if a stored record still names its id (a crash
+  // mid-deactivate can leave exactly that poisoned record behind).
+  // A FAILED query says nothing about which groups exist: skip the prune (and
+  // with it the persist below) entirely, or one transient API failure would
+  // wipe every stored record (review fix).
+  if (queryOk) {
+    for (const id of [...ownGroups]) {
+      const g = byId.get(id);
+      if (!g || String(g.title || '').startsWith(DISABLED_PREFIX)) { ownGroups.delete(id); changed = true; }
+    }
+  }
   const label = await deviceLabelNow();
   if (label) {
     const r = await claimTitledGroups(groups, label, rec);
@@ -535,21 +572,40 @@ async function loadGroups() {
   if (changed) await saveGroups({ migrated: true });
   else publishGroupHint();
 }
+/* 1.34.6: boot retry ladder — Chrome restores saved groups in batches
+   for a while after a restart, and a copy can also appear with no tabGroups
+   event we ever see; while the worker is awake, re-run the claim pass on a
+   short ladder so a late copy is claimed + merged even then. Plain
+   setTimeout (no new manifest permission); the event path below stays the
+   primary mechanism, this is the silent-appearance net. */
+let reclaimRetryArmed = false;
+function armReclaimRetries() {
+  if (reclaimRetryArmed) return;
+  reclaimRetryArmed = true;
+  for (const ms of [1000, 3000, 7000, 15000, 30000, 60000]) setTimeout(() => { reclaimGroups().catch(() => {}); }, ms);
+}
 function groupsReady() {
   if (!groupsLoaded) {
     groupsBusy = true;
     groupsLoaded = loadGroups().catch(() => {}).then(() => { groupsBusy = false; });
+    armReclaimRetries();
   }
   return groupsLoaded;
 }
 /* 1.34.4: an empty claim is not memoized dead. Chrome may restore saved
    groups only after the boot pass already ran (and found nothing); the
    tabGroups listeners below call this so a group that appears later is
-   claimed in the same worker lifetime, no service-worker restart needed. */
+   claimed in the same worker lifetime, no service-worker restart needed.
+   1.34.6: a pass already in flight no longer swallows the event — it
+   owes one more pass when it lands (a copy appearing mid-pass, after that
+   pass already queried, would otherwise wait for a later event). */
+let reclaimAgain = false;
 async function reclaimGroups() {
-  if (groupsBusy) return groupsReady();
+  if (acctBusy > 0) { reclaimAgain = true; return [...ownGroups]; } // 1.34.6: account transition in flight — stand down, but owe a pass (the transition's finally runs it)
+  if (groupsBusy) { reclaimAgain = true; await groupsReady(); return [...ownGroups]; } // callers (the panel claim) need the claimed set itself, not the pass promise — it resolves to loadGroups' undefined
   groupsLoaded = null;
   await groupsReady();
+  while (reclaimAgain && !acctBusy) { reclaimAgain = false; groupsLoaded = null; await groupsReady(); }
   return [...ownGroups];
 }
 function isOwnGroup(gid) { return gid !== undefined && gid !== null && gid !== -1 && ownGroups.has(gid); }
@@ -614,8 +670,14 @@ async function retitleOwnGroups(label) {
   for (const id of ownGroups) { try { await chrome.tabGroups.update(id, { title: groupTitle(label) }); } catch { /* gone */ } }
 }
 chrome.tabGroups.onRemoved.addListener((g) => { if (g && ownGroups.delete(g.id)) { for (const [w, gid] of [...primaryGroups]) if (gid === g.id) primaryGroups.delete(w); saveGroups(); } else publishGroupHint(); });
-chrome.tabGroups.onCreated.addListener(() => { publishGroupHint(); if (!ownGroups.size) reclaimGroups(); });
-chrome.tabGroups.onUpdated.addListener(() => { if (!ownGroups.size) reclaimGroups(); else publishGroupHint(); });
+/* 1.34.6: reclaim UNCONDITIONALLY on group events — the pre-1.34.6
+   gate (only while ownGroups was empty) is the timing hole behind the
+   duplicate groups: after a
+   restart one group gets claimed first, Chrome restores the saved copy
+   afterwards, the gate is already false, and the copy then sat unclaimed
+   and unmerged forever — two same-titled groups side by side. */
+chrome.tabGroups.onCreated.addListener(() => { publishGroupHint(); reclaimGroups(); });
+chrome.tabGroups.onUpdated.addListener(() => { publishGroupHint(); reclaimGroups(); });
 async function getTab(tabId) {
   try { return await chrome.tabs.get(tabId); } catch { throw err('TAB_GONE', 'tab no longer exists'); }
 }
@@ -830,6 +892,29 @@ function recBodyShape(body) {
   }
   return { len: str.length, keys };
 }
+/* 1.34.6: mask literal-risk values inside a step's el.html snapshot for the
+   redacted copy (capture already stripped field values; this catches PII printed
+   elsewhere in the markup — emails, phone-like digit runs, JWTs, value attrs) */
+function scrubSnapshotHtml(html) {
+  let s = String(html || '');
+  s = s.replace(/[^\s"'<]+@[^\s"'<]+\.[^\s"'<]+/g, '•••');
+  s = s.replace(/\+?\d[\d\s-]{9,}\d/g, '•••');
+  s = s.replace(/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, '•••');
+  s = s.replace(/\bsk-[A-Za-z0-9_-]{10,}\b/g, '•••');
+  s = s.replace(/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, '•••');
+  s = s.replace(/([?&](?:token|key|secret|auth|signature|sig|access_token)=)[^&"'\s]+/gi, '$1•••');
+  s = s.replace(/value\s*=\s*"[^"]*"/gi, 'value="•••"').replace(/value\s*=\s*'[^']*'/gi, "value='•••'");
+  if (s.endsWith('…')) {
+    // the capture-side 2048 cut can slice a PII run mid-way; the full-run
+    // patterns above then no longer match and the surviving prefix would
+    // ride along — mask a partial run at the cut as well
+    s = s.slice(0, -1)
+      .replace(/\+?\d[\d\s-]{5,}$/, '•••')
+      .replace(/[^\s"'<]+@[^\s"'<]*$/, '•••')
+      .replace(/\beyJ[\w-]*(?:\.[\w-]*)?$/, '•••') + '…';
+  }
+  return s;
+}
 function recRedactBundle(b) {
   const out = { ...b, redacted: true };
   const typed = FF && FF.typedValues ? FF.typedValues(b.steps) : []; // 1.29.1 typed values never ride in a storage key name
@@ -839,6 +924,15 @@ function recRedactBundle(b) {
     if (x.url) x.url = recRedactUrl(x.url);
     if ((x.kind === 'input' || x.kind === 'fill') && (x.secret || recFieldSensitive(x.el) || x.value === '•••')) x.value = '•••';
     if (x.el && x.el.text && (x.kind === 'input' || x.kind === 'fill')) x.el = { ...x.el, text: undefined };
+    if (x.el && x.el.html) x.el = { ...x.el, html: scrubSnapshotHtml(x.el.html) }; // 1.34.6: snapshot through the redaction pipeline
+    if (x.el) { // 1.34.6 review fix: the describe fallback fields ride the same bundle —
+      // scrub them with the same literal-risk pass (a title like 「打 13800138000」
+      // must not carry the number into the redacted copy untouched)
+      const el2 = { ...x.el }; let dirty = false;
+      for (const k of ['title', 'alt', 'aria', 'cls']) if (typeof el2[k] === 'string') { el2[k] = scrubSnapshotHtml(el2[k]); dirty = true; }
+      if (Array.isArray(el2.anc)) { el2.anc = el2.anc.map((a) => scrubSnapshotHtml(a)); dirty = true; }
+      if (dirty) x.el = el2;
+    }
     if (x.frame && x.frame.url) x.frame = { ...x.frame, url: recRedactUrl(x.frame.url) };
     if (x.from && x.from.url) x.from = { ...x.from, url: recRedactUrl(x.from.url) };
     return x;
@@ -894,6 +988,7 @@ function recStepView(x, i) {
   switch (x.kind) {
     case 'navigate': text = `打开「${String(x.title || host || x.url || '').slice(0, 40)}」`; sub = String(x.url || '').replace(/^https?:\/\//, '').split('?')[0].slice(0, 60); break;
     case 'click': text = `点击「${nm || '元素'}」`; sub = [el.role === 'textbox' || el.tag === 'INPUT' ? '输入框' : el.role === 'button' || el.tag === 'BUTTON' ? '按钮' : el.role || '', el.nth ? `第 ${el.nth + 1} 个` : ''].filter(Boolean).join(' · '); break;
+    case 'drag': text = `拖动「${nm || '元素'}」`; sub = `位移 ${x.dx || 0}, ${x.dy || 0}`; break;
     case 'fill': case 'input': text = x.secret ? `输入${x.secret === 'otp' ? '验证码' : '密码'}（不记录）` : `输入「${String(x.value == null ? '' : x.value).slice(0, 30)}」`; sub = nm; break;
     case 'select': text = `选择「${String(x.value == null ? '' : x.value).slice(0, 24)}」`; sub = nm ? nm + ' · 下拉框' : '下拉框'; break;
     case 'check': text = `${x.checked ? '勾选' : '取消勾选'}「${nm || '选项'}」`; break;
@@ -925,6 +1020,7 @@ function recFlowSummary(flow) {
     switch (s && s.type) {
       case 'navigate': { let u = s.url || ''; try { u = new URL(u).host; } catch { /* keep */ } return `打开 ${u}`; }
       case 'click': return `点击「${tg(s.target)}」`;
+      case 'drag': return `拖动「${tg(s.target)}」`;
       case 'fill': return `输入 ${val(s.value)}`;
       case 'select': return `选择 ${val(s.value)}`;
       case 'check': return `${s.checked ? '勾选' : '取消勾选'}「${tg(s.target)}」`;
@@ -3853,6 +3949,23 @@ function fpPage(op, a) {
     const rt = ok ? '' : retargetOf(el, hit);
     return { rect: rectOf(el), x, y, hitOk: ok, retarget: rt || undefined, obscuredBy: ok ? '' : describeHit(hit), hit: hit ? { ref: refOf(hit), name: (accName(hit) || tx(hit.innerText !== undefined ? hit.innerText : hit.textContent || '')).slice(0, 40) } : undefined, enabled: enabled(el), scrolled, name: (clsName(el) || accName(el)).slice(0, 80), hidden: doc.visibilityState === 'hidden' }; // 1.34.3: hit = what is ACTUALLY at the point (temp ref + name), so an OBSCURED verdict names a clickable element, not a prose description
   }
+  if (op === 'dragGeom') {
+    // 1.34.6: geometry for a drag replay — the target's rect and its CONTAINER's
+    // rect (frame-viewport coords), so the caller can place the grab point by the
+    // recorded offset % and scale the displacement by the current container size
+    const el = byRef(a.ref);
+    if (!el) return { gone: true };
+    if (!visible(el)) return { visible: false };
+    let r = el.getBoundingClientRect();
+    const vw = W.innerWidth || doc.documentElement.clientWidth; const vh = W.innerHeight || doc.documentElement.clientHeight;
+    if (a.scroll !== false && !(r.top >= 0 && r.left >= 0 && r.bottom <= vh && r.right <= vw)) {
+      try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch { el.scrollIntoView(); }
+      r = el.getBoundingClientRect();
+    }
+    const p = el.parentElement;
+    const pr = p && p.getBoundingClientRect ? p.getBoundingClientRect() : r;
+    return { rect: rectOf(el), parent: [Math.round(pr.left * 10) / 10, Math.round(pr.top * 10) / 10, Math.round(pr.width * 10) / 10, Math.round(pr.height * 10) / 10], enabled: enabled(el) };
+  }
   if (op === 'clickDom') {
     const el = byRef(a.ref);
     if (!el) return { ok: false, error: 'gone' };
@@ -5719,6 +5832,39 @@ async function flowStep(run, s, sub) {
         run.tabs[s.opens] = opened.tabId;
       }
       return { via: r0.spec, navigated: r.navigated, opened: r.opened };
+    }
+    case 'drag': {
+      // 1.34.6: replay the recorded gesture — grab the target at the recorded
+      // offset %, move by the recorded displacement (scaled by the CURRENT container
+      // size when the step carries dxr/dyr; recorded pixels are the fallback),
+      // release. The semantic gate classifies the press point exactly like a click.
+      const r0 = await flowResolve(tab, s.target, wait);
+      const { frameId, local } = splitRef(r0.ref);
+      const g = await inFrame(tab, frameId, 'dragGeom', { ref: local });
+      if (!g || g.gone || g.visible === false) throw err('NOT_FOUND', `${FF.describeTarget(s.target)}: element is gone or not visible`);
+      const rect = g.rect; // [left, top, width, height], frame-viewport coords
+      const fx = Number(s.from && s.from.x), fy = Number(s.from && s.from.y);
+      const sx = rect[0] + rect[2] * (Number.isFinite(fx) ? fx : 50) / 100;
+      const sy = rect[1] + rect[3] * (Number.isFinite(fy) ? fy : 50) / 100;
+      let dx = Number(s.dx) || 0, dy = Number(s.dy) || 0;
+      if (g.parent) { if (Number.isFinite(s.dxr)) dx = s.dxr * g.parent[2]; if (Number.isFinite(s.dyr)) dy = s.dyr * g.parent[3]; }
+      const off = await frameOffset(tab, frameId);
+      if (!off) throw err('NOT_FOUND', `${FF.describeTarget(s.target)}: enclosing frame could not be located`);
+      const X = Math.round((sx + off.x) * 10) / 10, Y = Math.round((sy + off.y) * 10) / 10;
+      const EX = Math.round((sx + dx + off.x) * 10) / 10, EY = Math.round((sy + dy + off.y) * 10) / 10;
+      return execCore(sub, { cls: 'write', scope: 'control',
+        classify: (t) => cdpClassify(t, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: X, y: Y, button: 'left', buttons: 1, clickCount: 1 }),
+        run: async () => {
+          await ensureDebugger(tab);
+          const send = (params) => withTimeout(chrome.debugger.sendCommand({ tabId: tab }, 'Input.dispatchMouseEvent', params), 2500, 'INPUT_TIMEOUT');
+          await send({ type: 'mouseMoved', x: X, y: Y, button: 'none', buttons: 0 }).catch(() => {});
+          await send({ type: 'mousePressed', x: X, y: Y, button: 'left', buttons: 1, clickCount: 1 });
+          const n = Math.max(4, Math.min(24, Math.round(Math.hypot(EX - X, EY - Y) / 24)));
+          for (let i = 1; i <= n; i++) { await send({ type: 'mouseMoved', x: Math.round((X + (EX - X) * i / n) * 10) / 10, y: Math.round((Y + (EY - Y) * i / n) * 10) / 10, button: 'left', buttons: 1 }); await sleep(12); }
+          await send({ type: 'mouseReleased', x: EX, y: EY, button: 'left', buttons: 0, clickCount: 1 });
+          return { dragged: { dx: Math.round(EX - X), dy: Math.round(EY - Y) } };
+        },
+        audit: (o) => `flow drag tab=${tab} dx=${o.dragged.dx} dy=${o.dragged.dy}` });
     }
     case 'fill': return fillField(s.target, val(s.value), s.kind);
     case 'select': return fillField(s.target, val(s.value), s.kind === 'combobox' ? undefined : s.kind);

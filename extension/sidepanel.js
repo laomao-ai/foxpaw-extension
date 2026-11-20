@@ -1316,7 +1316,7 @@ function renderIslandDet(list, m) {
     const cf = connFor();
     const st = conn.state === 'online' ? `<span class="ok">${esc(cf || '已连接')}</span>` : `<span class="bad">${esc(connShort(conn))}</span>`;
     b.append(el(`<div class="dr"><span class="v"><b>${esc(devName())}</b> · ${st}</span></div>`));
-    const vr = el(`<div class="dr"><span class="v" title="${esc(ver)}">FoxPaw 内测版 ${esc(String(ver).split('.').slice(0, 2).join('.'))}</span><button class="mini" id="islChk" type="button">${updChecking ? '检查中…' : '检查更新'}</button></div>`);
+    const vr = el(`<div class="dr"><span class="v" title="${esc(ver)}">FoxPaw 内测版 ${esc(String(ver).split('.').slice(0, 2).join('.'))} · ${esc(ver)}</span><button class="mini" id="islChk" type="button">${updChecking ? '检查中…' : '检查更新'}</button></div>`);
     vr.querySelector('button').onclick = (e) => { e.stopPropagation(); checkUpdate(true); };
     b.append(vr);
   }
@@ -1567,10 +1567,12 @@ function renderMe() {
   $('meSwitch').classList.toggle('hidden', !(acct && acct.email));
   $('meDevice').textContent = D.ui.deviceLabel || '—';
   $('meConn').textContent = connShort(conn);
-  { // 1.34.1: users see the beta label with major.minor only (FoxPaw 内测版 1.34 / FoxPaw Beta 1.34); the full number is in the tooltip
+  { // 1.34.6: the beta line name (内测版 1.34) AND the exact patch version ride the
+    // same line — 1.34.4 and 1.34.5 both rendered as just 「内测版 1.34」, and users
+    // could not tell whether they had updated (asked twice on 2026-11-19)
     const full = String(conn.version || chrome.runtime.getManifest?.().version || '');
     const mm = full.split('.').slice(0, 2).join('.');
-    $('meVer').textContent = mm ? `FoxPaw 内测版 ${mm}` : '—';
+    $('meVer').textContent = mm ? `FoxPaw 内测版 ${mm} · ${full}` : '—';
     $('meVer').title = full;
   }
   { // 1.34.5: channel next to the version （正式版 = production relay, 测试版 = test relay, never shipped)
